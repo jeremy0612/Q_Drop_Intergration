@@ -1,0 +1,6 @@
+outs:
+- md5: 207ff00021f2b42e069cef8851c2d66f.dir
+  size: 133012798
+  nfiles: 9
+  hash: md5
+  path: mnist
