@@ -1,0 +1,20 @@
+train:
+  epochs: 20
+  batch_size: 32
+  initial_lr: 0.3
+  final_lr: 0.03
+
+model:
+  n_qubits: 4
+  n_layers: 2
+
+data:
+  train_samples: 500
+  test_samples: 300
+  class_1: 3
+  class_2: 6
+
+algorithms:
+  - pruning
+  - dropout
+  - combined

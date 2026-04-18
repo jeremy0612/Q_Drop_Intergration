@@ -1,0 +1,108 @@
+name: Q-Drop QGN Integration Training Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  train:
+    runs-on: [self-hosted, gpu, A6000]
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install dvc dvc-s3 cml tensorflow-macos tensorflow-metal pennylane pennylane-lightning numpy scipy matplotlib
+
+      - name: Setup DVC
+        run: |
+          dvc config core.autostage true
+          dvc pull || echo "No remote data yet"
+
+      - name: Run training pipeline
+        run: |
+          dvc repro --force
+
+      - name: Generate metrics report
+        run: |
+          cat > report.md << 'EOF'
+          # Q-Drop Training Results
+
+          ## Metrics
+          \`\`\`
+          EOF
+          python -c "
+          import json
+          with open('metrics.json') as f:
+              m = json.load(f)
+              for algo, metrics in m['algorithms'].items():
+                  print(f'- **{algo}**: Accuracy={metrics[\"accuracy\"]:.4f}, Loss={metrics[\"final_loss\"]:.4f}')
+          " >> report.md
+
+          echo '
+          \`\`\`' >> report.md
+
+      - name: Compare with baseline
+        run: |
+          if [ -f baseline.json ]; then
+            python -c "
+            import json
+            with open('metrics.json') as f:
+              curr = json.load(f)
+            with open('baseline.json') as f:
+              base = json.load(f)
+
+            best_curr = curr['best_accuracy']
+            best_base = base['best_accuracy']
+            delta = best_curr - best_base
+
+            print(f'Baseline: {best_base:.4f}')
+            print(f'Current:  {best_curr:.4f}')
+            print(f'Delta:    {delta:+.4f}')
+
+            if delta > 0:
+              print('✅ Improvement!')
+            elif delta < -0.01:
+              print('❌ Regression!')
+            else:
+              print('➡️ Stable')
+            "
+          fi
+
+      - uses: iterative/setup-cml@v1
+
+      - name: Push metrics to PR
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat report.md > report_full.md
+          echo "" >> report_full.md
+          echo "## Plot" >> report_full.md
+          cml-publish src/qd_hqgc_mnist_training.png -o >> report_full.md
+          cml-comment create report_full.md
+
+      - name: Commit metrics (on push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cp metrics.json baseline.json
+          git config user.email "ci@example.com"
+          git config user.name "CI Bot"
+          git add baseline.json
+          git commit -m "metrics: update baseline after training" || true
+          git push origin HEAD:main || true
+
+      - name: DVC push
+        if: success()
+        run: |
+          dvc push || echo "No remote configured"

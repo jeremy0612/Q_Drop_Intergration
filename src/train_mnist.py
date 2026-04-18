@@ -22,6 +22,8 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import BinaryCrossentropy
 import matplotlib.pyplot as plt
 import random as rd
+import json
+from datetime import datetime
 
 from models.integrated_model import IntegratedQDropHQGCModel
 
@@ -248,6 +250,28 @@ def main():
     print("="*60)
     for algo, acc in zip(algorithms, accuracies):
         print(f"{algo:20s}: {acc:.4f}")
+
+    # Save metrics as JSON for CML/DVC
+    metrics = {
+        "timestamp": datetime.now().isoformat(),
+        "algorithms": {},
+        "best_algorithm": max(zip(algorithms, accuracies), key=lambda x: x[1])[0],
+        "best_accuracy": max(accuracies)
+    }
+
+    for algo, acc, hist in zip(algorithms, accuracies, histories):
+        metrics["algorithms"][algo] = {
+            "accuracy": float(acc),
+            "final_loss": float(hist.history['loss'][-1]),
+            "final_val_loss": float(hist.history['val_loss'][-1]),
+            "final_val_accuracy": float(hist.history['val_accuracy'][-1])
+        }
+
+    # Save to parent directory (accessible from CI)
+    metrics_path = os.path.join(os.path.dirname(__file__), "..", "metrics.json")
+    with open(metrics_path, 'w') as f:
+        json.dump(metrics, f, indent=2)
+    print(f"\n[+] Metrics saved to {metrics_path}")
 
     # Plot
     plot_results(histories, algorithms)

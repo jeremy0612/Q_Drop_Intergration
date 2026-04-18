@@ -41,3 +41,15 @@ data/mnist/
 
 # Conda env file is tracked, but lock files are not
 *.lock
+
+# DVC
+dvc.lock
+.dvc/tmp/
+
+# Training metrics (current run)
+metrics.json
+!baseline.json
+
+# Model artifacts (tracked by DVC, not git)
+saved_models/
+*.dvc

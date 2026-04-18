@@ -1,0 +1,14 @@
+stages:
+  train:
+    cmd: cd src && python train_mnist.py
+    deps:
+      - src/train_mnist.py
+      - src/models/integrated_model.py
+      - src/utils/pruning.py
+      - src/utils/dropout.py
+    metrics:
+      - metrics.json:
+          cache: false
+    plots:
+      - src/qd_hqgc_mnist_training.png:
+          cache: false
