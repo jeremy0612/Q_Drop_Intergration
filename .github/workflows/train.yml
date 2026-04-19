@@ -7,6 +7,9 @@ on:
 jobs:
   train:
     runs-on: [A6000]
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Add npm global bin to PATH
@@ -103,7 +106,7 @@ jobs:
           if [ -f src/qd_hqgc_mnist_training.png ]; then
             echo "## Training Curves & Algorithm Comparison" >> report.md
             echo "" >> report.md
-            cml publish src/qd_hqgc_mnist_training.png >> report.md
+            echo "![Training curves](./src/qd_hqgc_mnist_training.png)" >> report.md
           fi
 
           cml comment create report.md
