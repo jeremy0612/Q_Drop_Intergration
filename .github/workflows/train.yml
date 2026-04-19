@@ -57,7 +57,7 @@ jobs:
           cml ci
 
           # Build report
-          python - << 'PYEOF'
+          python - << 'PYEOF' > report.md
           import json, sys
           with open('metrics.json') as f:
               m = json.load(f)
@@ -97,7 +97,7 @@ jobs:
               lines.append('')
 
           print('\n'.join(lines))
-          PYEOF > report.md
+          PYEOF
 
           # Embed training figure
           if [ -f src/qd_hqgc_mnist_training.png ]; then
