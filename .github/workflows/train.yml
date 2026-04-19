@@ -88,6 +88,12 @@ jobs:
           PYEOF
           fi
 
+      - name: Configure npm prefix
+        run: |
+          mkdir -p "$HOME/.npm-global"
+          npm config set prefix "$HOME/.npm-global"
+          echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
       - uses: iterative/setup-cml@v1
         with:
           sudo: false
