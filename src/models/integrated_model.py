@@ -64,14 +64,11 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
         self.dev = qml.device('default.qubit', wires=n_qubits)
 
         # Build the quantum node (QNode) using HQGC-style circuits
-        # Use interface='tf' so gradients flow through TF's gradient tape
-        @qml.qnode(self.dev, interface='tf', diff_method='backprop')
+        # Use interface='numpy' for stability with eager execution
+        @qml.qnode(self.dev, interface='numpy', diff_method='parameter-shift')
         def quantum_circuit(inputs, weights):
-            # Cast to raw TF tensors to avoid Keras 3 / autoray 'keras' backend issue
-            inputs = tf.cast(inputs, tf.float32)
-            weights = tf.cast(weights, tf.float32)
             # Angle embedding: each input -> RX rotation
-            AngleEmbedding(inputs, wires=range(n_qubits))
+            AngleEmbedding(inputs, wires=range(n_qubits), rotation='X')
             # Variational layers with entanglement
             BasicEntanglerLayers(weights, wires=range(n_qubits))
             # Measure Pauli-Z on all qubits
@@ -129,11 +126,22 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
         preprocessed = self.dense_preprocess(flattened)
 
         # Run quantum circuit for each preprocessed output
-        quantum_outputs = tf.map_fn(
-            lambda x: tf.cast(tf.stack(self.quantum_circuit(x, self.quantum_weights)), tf.float32),
-            preprocessed,
-            fn_output_signature=tf.TensorSpec(shape=(self.n_qubits,), dtype=tf.float32)
-        )
+        batch_size = tf.shape(preprocessed)[0]
+        quantum_outputs_list = []
+
+        for i in tf.range(batch_size):
+            x = preprocessed[i]
+            w = self.quantum_weights
+
+            # Convert to numpy for quantum circuit (numpy interface)
+            x_np = x.numpy() if tf.executing_eagerly() else np.asarray(x)
+            w_np = w.numpy() if tf.executing_eagerly() else np.asarray(w)
+
+            # Execute quantum circuit
+            result = np.array(self.quantum_circuit(x_np, w_np), dtype=np.float32)
+            quantum_outputs_list.append(tf.constant(result, dtype=tf.float32))
+
+        quantum_outputs = tf.stack(quantum_outputs_list)
 
         # Handle NaN values
         quantum_outputs = tf.where(tf.math.is_nan(quantum_outputs),
