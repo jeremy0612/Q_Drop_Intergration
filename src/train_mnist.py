@@ -154,10 +154,10 @@ def train_model(model, x_train, y_train, x_test, y_test, config, algorithm):
 
 
 def plot_results(histories, algorithms):
-    """Plot training results"""
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    """Plot training results: curves + accuracy bar chart"""
+    fig, axes = plt.subplots(1, 3, figsize=(20, 5))
 
-    # Accuracy
+    # Accuracy curves
     for hist, algo in zip(histories, algorithms):
         axes[0].plot(hist.history['accuracy'], label=f'{algo} (train)', linestyle='-')
         axes[0].plot(hist.history['val_accuracy'], label=f'{algo} (val)', linestyle='--')
@@ -167,7 +167,7 @@ def plot_results(histories, algorithms):
     axes[0].legend()
     axes[0].grid()
 
-    # Loss
+    # Loss curves
     for hist, algo in zip(histories, algorithms):
         axes[1].plot(hist.history['loss'], label=f'{algo} (train)', linestyle='-')
         axes[1].plot(hist.history['val_loss'], label=f'{algo} (val)', linestyle='--')
@@ -177,10 +177,22 @@ def plot_results(histories, algorithms):
     axes[1].legend()
     axes[1].grid()
 
+    # Final val accuracy bar chart
+    val_accs = [hist.history['val_accuracy'][-1] for hist in histories]
+    colors = ['#4C72B0', '#DD8452', '#55A868']
+    bars = axes[2].bar(algorithms, val_accs, color=colors[:len(algorithms)], edgecolor='black')
+    axes[2].set_ylim(0, 1.0)
+    axes[2].set_ylabel('Val Accuracy')
+    axes[2].set_title('Final Validation Accuracy by Algorithm')
+    axes[2].grid(axis='y', alpha=0.3)
+    for bar, acc in zip(bars, val_accs):
+        axes[2].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                     f'{acc:.3f}', ha='center', va='bottom', fontweight='bold')
+
     plt.tight_layout()
-    plt.savefig('qd_hqgc_mnist_training.png')
+    plt.savefig('qd_hqgc_mnist_training.png', dpi=150)
     print("[+] Plot saved to qd_hqgc_mnist_training.png")
-    plt.show()
+    plt.close()
 
 
 def main():

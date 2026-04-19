@@ -47,68 +47,63 @@ jobs:
         run: |
           cd src && python train_mnist.py
 
-      - name: Generate metrics report
-        run: |
-          cat > report.md << 'EOF'
-          # Q-Drop Training Results
-
-          ## Metrics
-          \`\`\`
-          EOF
-          python - << 'PYEOF' >> report.md
-          import json
-          with open('metrics.json') as f:
-              m = json.load(f)
-              for algo, metrics in m['algorithms'].items():
-                  print(f'- **{algo}**: Accuracy={metrics["accuracy"]:.4f}, Loss={metrics["final_loss"]:.4f}')
-          PYEOF
-          echo '\`\`\`' >> report.md
-
-      - name: Compare with baseline
-        run: |
-          if [ -f baseline.json ]; then
-            python - << 'PYEOF'
-          import json
-          with open('metrics.json') as f:
-              curr = json.load(f)
-          with open('baseline.json') as f:
-              base = json.load(f)
-          best_curr = curr['best_accuracy']
-          best_base = base['best_accuracy']
-          delta = best_curr - best_base
-          print(f'Baseline: {best_base:.4f}')
-          print(f'Current:  {best_curr:.4f}')
-          print(f'Delta:    {delta:+.4f}')
-          if delta > 0:
-              print('Improvement!')
-          elif delta < -0.01:
-              print('Regression!')
-          else:
-              print('Stable')
-          PYEOF
-          fi
-
-      - name: Configure npm prefix
-        run: |
-          mkdir -p "$HOME/.npm-global"
-          npm config set prefix "$HOME/.npm-global"
-          echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
-
-      - uses: iterative/setup-cml@v1
-        with:
-          sudo: false
-
-      - name: Push metrics to PR
+      - name: Generate CML report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cat report.md > report_full.md
-          echo "" >> report_full.md
-          echo "## Plot" >> report_full.md
+          cml ci
+
+          # Build report
+          python - << 'PYEOF'
+          import json, sys
+          with open('metrics.json') as f:
+              m = json.load(f)
+
+          lines = []
+          lines.append('# Q-Drop + HQGC Training Report')
+          lines.append('')
+          lines.append(f"**Timestamp:** {m['timestamp']}")
+          lines.append(f"**Best algorithm:** {m['best_algorithm']} ({m['best_accuracy']:.4f} accuracy)")
+          lines.append('')
+          lines.append('## Results by Algorithm')
+          lines.append('')
+          lines.append('| Algorithm | Val Accuracy | Final Val Loss |')
+          lines.append('|-----------|:------------:|:--------------:|')
+          for algo, metrics in m['algorithms'].items():
+              lines.append(f"| {algo} | {metrics['final_val_accuracy']:.4f} | {metrics['final_val_loss']:.4f} |")
+          lines.append('')
+
+          # Baseline comparison
+          try:
+              with open('baseline.json') as f:
+                  base = json.load(f)
+              delta = m['best_accuracy'] - base['best_accuracy']
+              sign = '+' if delta >= 0 else ''
+              status = 'Improvement' if delta > 0 else ('Regression' if delta < -0.01 else 'Stable')
+              lines.append('## Baseline Comparison')
+              lines.append('')
+              lines.append(f"| | Accuracy |")
+              lines.append(f"|---|:---:|")
+              lines.append(f"| Baseline ({base['best_algorithm']}) | {base['best_accuracy']:.4f} |")
+              lines.append(f"| Current ({m['best_algorithm']}) | {m['best_accuracy']:.4f} |")
+              lines.append(f"| Delta | {sign}{delta:.4f} |")
+              lines.append(f"| Status | **{status}** |")
+              lines.append('')
+          except FileNotFoundError:
+              lines.append('> No baseline found — first run.')
+              lines.append('')
+
+          print('\n'.join(lines))
+          PYEOF > report.md
+
+          # Embed training figure
           if [ -f src/qd_hqgc_mnist_training.png ]; then
-            cml-publish src/qd_hqgc_mnist_training.png -o >> report_full.md || echo "CML plot pub failed"
+            echo "## Training Curves & Algorithm Comparison" >> report.md
+            echo "" >> report.md
+            cml publish src/qd_hqgc_mnist_training.png >> report.md
           fi
-          cml-comment create report_full.md || echo "CML comment failed"
+
+          cml comment create report.md
 
       - name: Save artifacts to temp folder
         if: always()
