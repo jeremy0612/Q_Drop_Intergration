@@ -89,6 +89,8 @@ jobs:
           fi
 
       - uses: iterative/setup-cml@v1
+        with:
+          sudo: false
 
       - name: Push metrics to PR
         env:
