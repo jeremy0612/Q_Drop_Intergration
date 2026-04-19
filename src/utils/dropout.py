@@ -62,7 +62,10 @@ class QuantumDynamicDropoutManager:
         if quantum_index is None:
             raise ValueError("Quantum weights variable not found in trainable_variables.")
 
-        quantum_grad = gradients[quantum_index]
+        # Gradient is None when the tape can't differentiate through numpy ops in the
+        # quantum circuit; use zeros so the mask operations below don't crash.
+        raw_grad = gradients[quantum_index]
+        quantum_grad = raw_grad if raw_grad is not None else tf.zeros_like(self.quantum_weights)
 
         # Define dropout functions
         def one_wire_drop():
