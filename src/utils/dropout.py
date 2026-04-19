@@ -68,12 +68,16 @@ class QuantumDynamicDropoutManager:
         quantum_grad = raw_grad if raw_grad is not None else tf.zeros_like(self.quantum_weights)
 
         # Define dropout functions
+        # Masks are flat [n_layers*n_qubits]; reshape to match quantum_grad shape [n_layers, n_qubits]
         def one_wire_drop():
-            return tf.where(self.theta_wire_0 == 1, 0.0, quantum_grad)
+            mask = tf.cast(tf.reshape(self.theta_wire_0, tf.shape(quantum_grad)), tf.bool)
+            return tf.where(mask, tf.zeros_like(quantum_grad), quantum_grad)
 
         def two_wire_drop():
-            dropped = tf.where(self.theta_wire_0 == 1, 0.0, quantum_grad)
-            return tf.where(self.theta_wire_1 == 1, 0.0, dropped)
+            mask0 = tf.cast(tf.reshape(self.theta_wire_0, tf.shape(quantum_grad)), tf.bool)
+            mask1 = tf.cast(tf.reshape(self.theta_wire_1, tf.shape(quantum_grad)), tf.bool)
+            dropped = tf.where(mask0, tf.zeros_like(quantum_grad), quantum_grad)
+            return tf.where(mask1, tf.zeros_like(quantum_grad), dropped)
 
         # Choose which dropout to apply
         def dropout_fn():
