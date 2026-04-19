@@ -29,7 +29,6 @@ jobs:
       - name: Install dependencies (Linux x86_64)
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install dvc dvc-s3 cml
           pip install tensorflow numpy scipy matplotlib
           pip install pennylane pennylane-lightning scikit-learn
 
@@ -44,14 +43,9 @@ jobs:
           print("✅ Imports OK")
           EOF
 
-      - name: DVC setup
-        run: |
-          dvc config core.autostage true
-          dvc pull -v || echo "⚠️ No remote or data"
-
       - name: Run training pipeline
         run: |
-          dvc repro --force
+          cd src && python train_mnist.py
 
       - name: Generate metrics report
         run: |
@@ -108,8 +102,10 @@ jobs:
           cat report.md > report_full.md
           echo "" >> report_full.md
           echo "## Plot" >> report_full.md
-          cml-publish src/qd_hqgc_mnist_training.png -o >> report_full.md || true
-          cml-comment create report_full.md || echo "⚠️ CML push skipped"
+          if [ -f src/qd_hqgc_mnist_training.png ]; then
+            cml-publish src/qd_hqgc_mnist_training.png -o >> report_full.md || echo "⚠️ CML plot pub failed"
+          fi
+          cml-comment create report_full.md || echo "⚠️ CML comment failed"
 
       - name: Save artifacts to temp folder
         if: always()
@@ -125,14 +121,10 @@ jobs:
       - name: Commit metrics (on push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp metrics.json baseline.json
+          cp ../metrics.json baseline.json
           git config user.email "ci@example.com"
           git config user.name "CI Bot"
           git add baseline.json
           git commit -m "metrics: update baseline after training" || true
           git push origin HEAD:main || true
 
-      - name: DVC push
-        if: success()
-        run: |
-          dvc push || echo "No remote configured"
