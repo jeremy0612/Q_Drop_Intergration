@@ -35,13 +35,13 @@ jobs:
       - name: Verify environment
         run: |
           python - << 'PYEOF'
-import tensorflow as tf
-import pennylane as qml
-print(f"TensorFlow: {tf.__version__}")
-print(f"GPU Available: {len(tf.config.list_physical_devices('GPU')) > 0}")
-print(f"PennyLane: {qml.__version__}")
-print("Imports OK")
-PYEOF
+          import tensorflow as tf
+          import pennylane as qml
+          print(f"TensorFlow: {tf.__version__}")
+          print(f"GPU Available: {len(tf.config.list_physical_devices('GPU')) > 0}")
+          print(f"PennyLane: {qml.__version__}")
+          print("Imports OK")
+          PYEOF
 
       - name: Run training pipeline
         run: |
@@ -50,45 +50,42 @@ PYEOF
       - name: Generate metrics report
         run: |
           cat > report.md << 'EOF'
-# Q-Drop Training Results
+          # Q-Drop Training Results
 
-## Metrics
-\`\`\`
-EOF
+          ## Metrics
+          \`\`\`
+          EOF
           python - << 'PYEOF' >> report.md
-import json
-with open('metrics.json') as f:
-    m = json.load(f)
-    for algo, metrics in m['algorithms'].items():
-        print(f'- **{algo}**: Accuracy={metrics["accuracy"]:.4f}, Loss={metrics["final_loss"]:.4f}')
-PYEOF
+          import json
+          with open('metrics.json') as f:
+              m = json.load(f)
+              for algo, metrics in m['algorithms'].items():
+                  print(f'- **{algo}**: Accuracy={metrics["accuracy"]:.4f}, Loss={metrics["final_loss"]:.4f}')
+          PYEOF
           echo '\`\`\`' >> report.md
 
       - name: Compare with baseline
         run: |
           if [ -f baseline.json ]; then
             python - << 'PYEOF'
-import json
-with open('metrics.json') as f:
-    curr = json.load(f)
-with open('baseline.json') as f:
-    base = json.load(f)
-
-best_curr = curr['best_accuracy']
-best_base = base['best_accuracy']
-delta = best_curr - best_base
-
-print(f'Baseline: {best_base:.4f}')
-print(f'Current:  {best_curr:.4f}')
-print(f'Delta:    {delta:+.4f}')
-
-if delta > 0:
-    print('Improvement!')
-elif delta < -0.01:
-    print('Regression!')
-else:
-    print('Stable')
-PYEOF
+          import json
+          with open('metrics.json') as f:
+              curr = json.load(f)
+          with open('baseline.json') as f:
+              base = json.load(f)
+          best_curr = curr['best_accuracy']
+          best_base = base['best_accuracy']
+          delta = best_curr - best_base
+          print(f'Baseline: {best_base:.4f}')
+          print(f'Current:  {best_curr:.4f}')
+          print(f'Delta:    {delta:+.4f}')
+          if delta > 0:
+              print('Improvement!')
+          elif delta < -0.01:
+              print('Regression!')
+          else:
+              print('Stable')
+          PYEOF
           fi
 
       - uses: iterative/setup-cml@v1
