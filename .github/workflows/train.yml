@@ -9,6 +9,9 @@ jobs:
     runs-on: [A6000]
 
     steps:
+      - name: Add npm global bin to PATH
+        run: echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
