@@ -165,21 +165,28 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
 
         # Find quantum weights gradient by exact name
         quantum_grad = None
+        quantum_weights_found = False
         for idx, var in enumerate(self.trainable_variables):
             if 'quantum_weights' in var.name:
-                quantum_grad = gradients[idx]
-                print(f"[DEBUG] Found quantum_weights at idx {idx}: {var.name}")
+                quantum_weights_found = True
+                quantum_grad = gradients[idx]  # may be None if tape lost track through numpy ops
                 break
 
-        if quantum_grad is None:
-            print(f"[DEBUG] Trainable vars: {[v.name for v in self.trainable_variables]}")
-            raise ValueError(f"Quantum weights not found")
+        if not quantum_weights_found:
+            raise ValueError(
+                f"Quantum weights variable not found in trainable_variables: "
+                f"{[v.name for v in self.trainable_variables]}"
+            )
 
         # Apply Q-Drop algorithms
-        if self.algorithm in ['pruning', 'both'] and self.pruning_algo is not None:
+        # quantum_grad may be None when the circuit runs via numpy interface (tape can't
+        # differentiate through .numpy() calls); fall back to plain gradient update in that case.
+        if self.algorithm in ['pruning', 'both'] and self.pruning_algo is not None and quantum_grad is not None:
             self.pruning_algo.apply(quantum_grad, self.optimizer, gradients, self.trainable_variables)
         else:
-            self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+            clean = [g if g is not None else tf.zeros_like(v)
+                     for g, v in zip(gradients, self.trainable_variables)]
+            self.optimizer.apply_gradients(zip(clean, self.trainable_variables))
 
         if self.algorithm in ['dropout', 'both'] and self.dropout_algo is not None:
             gradients = self.dropout_algo.apply_dropout(gradients, self.trainable_variables)
