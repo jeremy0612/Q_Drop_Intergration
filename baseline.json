@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-04-18T00:00:00",
+  "algorithms": {
+    "Pruning": {
+      "accuracy": 0.65,
+      "final_loss": 0.45,
+      "final_val_loss": 0.48,
+      "final_val_accuracy": 0.65
+    },
+    "Dropout": {
+      "accuracy": 0.63,
+      "final_loss": 0.48,
+      "final_val_loss": 0.50,
+      "final_val_accuracy": 0.63
+    },
+    "Combined": {
+      "accuracy": 0.69,
+      "final_loss": 0.40,
+      "final_val_loss": 0.42,
+      "final_val_accuracy": 0.69
+    }
+  },
+  "best_algorithm": "Combined",
+  "best_accuracy": 0.69
+}
