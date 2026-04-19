@@ -108,7 +108,7 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
             theta_wire_0 = tf.constant([1, 0, 1, 0] + [0]*(n_qubits*n_layers-4), dtype=tf.int32)
             theta_wire_1 = tf.constant([0, 1, 0, 0] + [0]*(n_qubits*n_layers-4), dtype=tf.int32)
             n_drop = tf.constant(1, dtype=tf.int32)
-            self.drop_flag = tf.Variable(apply_dropout_flag, trainable=False)
+            self.drop_flag = tf.Variable(apply_dropout, trainable=False)
 
             self.dropout_algo = QuantumDynamicDropoutManager(
                 self.quantum_weights,
