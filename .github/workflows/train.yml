@@ -2,107 +2,222 @@ name: Q-Drop QGN Integration Training Pipeline
 
 on:
   push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+    branches: [main]
 
 jobs:
   train:
     runs-on: [self-hosted, gpu, A6000]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: System info
+        run: |
+          echo "=== Environment Check ==="
+          uname -a
+          python --version
+          pip --version
+          echo "GPU Info:"
+          nvidia-smi || echo "nvidia-smi not found"
+          echo "Python arch: $(python -c 'import struct; print(struct.calcsize("P") * 8)')-bit"
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install dvc dvc-s3 cml tensorflow-macos tensorflow-metal pennylane pennylane-lightning numpy scipy matplotlib
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
 
-      - name: Setup DVC
+      - name: Install dependencies (Linux x86_64)
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install dvc dvc-s3 cml
+          pip install tensorflow numpy scipy matplotlib
+          pip install pennylane pennylane-lightning[all]
+          pip install scikit-learn
+
+      - name: DVC setup
+        env:
+          DVC_NO_ANALYTICS: '1'
         run: |
           dvc config core.autostage true
-          dvc pull || echo "No remote data yet"
+          dvc config core.check_update false
+          dvc config core.analytics false
+          echo "DVC version:"
+          dvc version
+
+      - name: DVC pull dataset
+        run: |
+          echo "[*] Pulling datasets..."
+          dvc pull -v || echo "⚠️ No remote data configured or dataset already present"
+
+      - name: Verify training environment
+        run: |
+          python << 'EOF'
+          import sys
+          import platform
+          import tensorflow as tf
+          import pennylane as qml
+
+          print("\n=== Training Environment Verification ===")
+          print(f"Python: {sys.version}")
+          print(f"Platform: {platform.platform()}")
+          print(f"Architecture: {platform.machine()}")
+          print(f"TensorFlow: {tf.__version__}")
+          print(f"GPU Available: {len(tf.config.list_physical_devices('GPU')) > 0}")
+          if len(tf.config.list_physical_devices('GPU')) > 0:
+              print(f"GPU Devices: {[d.name for d in tf.config.list_physical_devices('GPU')]}")
+          print(f"PennyLane: {qml.__version__}")
+          print("✅ All imports successful\n")
+          EOF
 
       - name: Run training pipeline
         run: |
-          dvc repro --force
+          echo "[*] Starting DVC pipeline..."
+          dvc repro --force --verbose
 
       - name: Generate metrics report
         run: |
-          cat > report.md << 'EOF'
-          # Q-Drop Training Results
-
-          ## Metrics
-          \`\`\`
-          EOF
-          python -c "
+          python << 'EOF'
           import json
-          with open('metrics.json') as f:
-              m = json.load(f)
-              for algo, metrics in m['algorithms'].items():
-                  print(f'- **{algo}**: Accuracy={metrics[\"accuracy\"]:.4f}, Loss={metrics[\"final_loss\"]:.4f}')
-          " >> report.md
+          import os
 
-          echo '
-          \`\`\`' >> report.md
+          with open('metrics.json') as f:
+              metrics = json.load(f)
+
+          report = f"""# Q-Drop Training Report
+
+          **Timestamp**: {metrics['timestamp']}
+          **Best Algorithm**: {metrics['best_algorithm']}
+          **Best Accuracy**: {metrics['best_accuracy']:.4f}
+
+          ## Algorithm Comparison
+
+          | Algorithm | Accuracy | Loss | Val Loss | Val Accuracy |
+          |-----------|----------|------|----------|--------------|
+          """
+
+          for algo, m in metrics['algorithms'].items():
+              report += f"| {algo} | {m['accuracy']:.4f} | {m['final_loss']:.4f} | {m['final_val_loss']:.4f} | {m['final_val_accuracy']:.4f} |\n"
+
+          with open('report.md', 'w') as f:
+              f.write(report)
+
+          print(report)
+          EOF
 
       - name: Compare with baseline
+        continue-on-error: true
         run: |
-          if [ -f baseline.json ]; then
-            python -c "
-            import json
-            with open('metrics.json') as f:
-              curr = json.load(f)
-            with open('baseline.json') as f:
-              base = json.load(f)
+          python << 'EOF'
+          import json
 
-            best_curr = curr['best_accuracy']
-            best_base = base['best_accuracy']
-            delta = best_curr - best_base
+          try:
+              with open('metrics.json') as f:
+                  curr = json.load(f)
+              with open('baseline.json') as f:
+                  base = json.load(f)
 
-            print(f'Baseline: {best_base:.4f}')
-            print(f'Current:  {best_curr:.4f}')
-            print(f'Delta:    {delta:+.4f}')
+              best_curr = curr['best_accuracy']
+              best_base = base['best_accuracy']
+              delta = best_curr - best_base
 
-            if delta > 0:
-              print('✅ Improvement!')
-            elif delta < -0.01:
-              print('❌ Regression!')
-            else:
-              print('➡️ Stable')
-            "
-          fi
+              comparison = f"""
+          ## Baseline Comparison
+
+          - **Baseline**: {best_base:.4f}
+          - **Current**: {best_curr:.4f}
+          - **Delta**: {delta:+.4f}
+          """
+
+              if delta > 0.01:
+                  comparison += "\n✅ **Improvement detected!**"
+              elif delta < -0.01:
+                  comparison += "\n❌ **Regression detected!**"
+              else:
+                  comparison += "\n➡️ **Performance stable**"
+
+              with open('comparison.md', 'a') as f:
+                  f.write(comparison)
+
+              print(comparison)
+          except FileNotFoundError:
+              print("⚠️ Baseline not found, skipping comparison")
+          EOF
 
       - uses: iterative/setup-cml@v1
 
-      - name: Push metrics to PR
+      - name: Create CML report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cat report.md > report_full.md
-          echo "" >> report_full.md
-          echo "## Plot" >> report_full.md
-          cml-publish src/qd_hqgc_mnist_training.png -o >> report_full.md
-          cml-comment create report_full.md
+          echo "## 📊 Q-Drop Training Results" > full_report.md
+          echo "" >> full_report.md
+          cat report.md >> full_report.md
+          echo "" >> full_report.md
 
-      - name: Commit metrics (on push to main)
+          if [ -f comparison.md ]; then
+            cat comparison.md >> full_report.md
+            echo "" >> full_report.md
+          fi
+
+          echo "## 📈 Training Plot" >> full_report.md
+          if [ -f src/qd_hqgc_mnist_training.png ]; then
+            cml-publish src/qd_hqgc_mnist_training.png -o >> full_report.md
+          fi
+
+          echo "## 📋 Artifacts" >> full_report.md
+          echo "- Metrics: \`metrics.json\`" >> full_report.md
+          echo "- Baseline: \`baseline.json\`" >> full_report.md
+
+          cat full_report.md
+
+      - name: Artifacts to temp folder
+        if: always()
+        run: |
+          ARTIFACT_DIR="/tmp/q-drop-training-${GITHUB_RUN_ID}"
+          mkdir -p "$ARTIFACT_DIR"
+
+          echo "[*] Saving artifacts to: $ARTIFACT_DIR"
+          cp metrics.json "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp baseline.json "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp full_report.md "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp src/qd_hqgc_mnist_training.png "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp dvc.lock "$ARTIFACT_DIR/" 2>/dev/null || true
+
+          ls -lah "$ARTIFACT_DIR"
+          echo "Artifacts saved to: $ARTIFACT_DIR"
+
+      - name: Update baseline (on main push)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           cp metrics.json baseline.json
-          git config user.email "ci@example.com"
+          git config user.email "ci@github.com"
           git config user.name "CI Bot"
           git add baseline.json
-          git commit -m "metrics: update baseline after training" || true
-          git push origin HEAD:main || true
+          git commit -m "ci: update baseline after training run" || echo "No changes to commit"
+          git push origin HEAD:main || echo "⚠️ Could not push baseline update"
 
-      - name: DVC push
-        if: success()
+      - name: DVC push (optional - requires remote)
+        if: always()
+        continue-on-error: true
         run: |
-          dvc push || echo "No remote configured"
+          echo "[*] Attempting DVC push..."
+          dvc push -v || echo "⚠️ DVC push skipped (no remote or auth)"
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## ✅ Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID**: $GITHUB_RUN_ID" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: $GITHUB_SHA" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: $GITHUB_REF_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner**: $(uname -s) $(uname -m)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifacts**: /tmp/q-drop-training-$GITHUB_RUN_ID" >> $GITHUB_STEP_SUMMARY
