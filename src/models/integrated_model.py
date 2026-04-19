@@ -163,18 +163,18 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
         # Compute gradients
         gradients = tape.gradient(loss, self.trainable_variables)
 
-        # Find quantum weights gradient
+        # Find quantum weights gradient by exact name match
         quantum_grad = None
+        quantum_weights_name = self.quantum_weights.name.split(':')[0]  # Strip device spec
+
         for idx, var in enumerate(self.trainable_variables):
-            if var is self.quantum_weights:
+            var_name = var.name.split(':')[0]
+            if 'quantum_weights' in var_name:
                 quantum_grad = gradients[idx]
                 break
 
         if quantum_grad is None:
-            # Debug: list all variable names
-            print(f"DEBUG: trainable vars: {[v.name for v in self.trainable_variables]}")
-            print(f"DEBUG: quantum_weights name: {self.quantum_weights.name}")
-            raise ValueError("Quantum weights not found in trainable_variables")
+            raise ValueError(f"Quantum weights not found. Available: {[v.name for v in self.trainable_variables]}")
 
         # Apply Q-Drop algorithms
         if self.algorithm in ['pruning', 'both'] and self.pruning_algo is not None:
