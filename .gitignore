@@ -53,3 +53,6 @@ metrics.json
 # Model artifacts (tracked by DVC, not git)
 saved_models/
 *.dvc
+
+# Graphify artifacts
+graphify-out/

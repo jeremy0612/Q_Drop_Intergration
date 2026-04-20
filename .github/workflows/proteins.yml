@@ -1,17 +1,17 @@
-name: MUTAG Experiment - QGCN Graph Classification
+name: PROTEINS Experiment - QGCN Graph Classification
 
 on:
   push:
     branches: [main]
     paths:
-      - 'src/train_mutag.py'
-      - 'src/data/load_mutag.py'
+      - 'src/train_proteins.py'
+      - 'src/data/load_proteins.py'
       - 'src/models/**'
-      - '.github/workflows/mutag.yml'
+      - '.github/workflows/proteins.yml'
   workflow_dispatch:
 
 jobs:
-  mutag:
+  proteins:
     runs-on: [A6000]
     permissions:
       contents: write
@@ -40,9 +40,9 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/huggingface/datasets
-          key: hf-datasets-mutag-v1
+          key: hf-datasets-proteins-v1
           restore-keys: |
-            hf-datasets-mutag-
+            hf-datasets-proteins-
 
       - name: Install dependencies
         run: |
@@ -65,9 +65,9 @@ jobs:
           print("Imports OK")
           PYEOF
 
-      - name: Run MUTAG experiment
+      - name: Run PROTEINS experiment
         run: |
-          cd src && python3 train_mutag.py
+          cd src && python3 train_proteins.py
 
       - name: Generate CML report
         env:
@@ -77,13 +77,13 @@ jobs:
 
           python3 - << 'PYEOF' > report.md
           import json, os
-          metrics_path = 'mutag_metrics.json'
+          metrics_path = 'proteins_metrics.json'
           with open(metrics_path) as f:
               m = json.load(f)
 
           hp = m.get('hyperparameters', {})
           lines = []
-          lines.append('# MUTAG Experiment Report — QGCN Graph Classification')
+          lines.append('# PROTEINS Experiment Report — QGCN Graph Classification')
           lines.append('')
           lines.append(f"**Timestamp:** {m['timestamp']}")
           lines.append(f"**Model:** {m['model']}")
@@ -137,10 +137,10 @@ jobs:
           print('\n'.join(lines))
           PYEOF
 
-          if [ -f mutag_results.png ]; then
+          if [ -f proteins_results.png ]; then
             echo "## Results Visualization" >> report.md
             echo "" >> report.md
-            cml publish mutag_results.png --md >> report.md
+            cml publish proteins_results.png --md >> report.md
           fi
 
           cml comment create report.md
@@ -148,19 +148,19 @@ jobs:
       - name: Save artifacts
         if: always()
         run: |
-          ARTIFACT_DIR="/tmp/mutag-${GITHUB_RUN_ID}"
+          ARTIFACT_DIR="/tmp/proteins-${GITHUB_RUN_ID}"
           mkdir -p "$ARTIFACT_DIR"
-          cp mutag_metrics.json "$ARTIFACT_DIR/" 2>/dev/null || true
-          cp mutag_results.png "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp proteins_metrics.json "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp proteins_results.png "$ARTIFACT_DIR/" 2>/dev/null || true
           ls -lah "$ARTIFACT_DIR"
           echo "Artifacts: $ARTIFACT_DIR"
 
       - name: Commit metrics
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp mutag_metrics.json mutag_baseline.json
+          cp proteins_metrics.json proteins_baseline.json
           git config user.email "ci@example.com"
           git config user.name "CI Bot"
-          git add mutag_baseline.json
-          git commit -m "metrics: update MUTAG baseline" || true
+          git add proteins_baseline.json
+          git commit -m "metrics: update PROTEINS baseline" || true
           git push origin HEAD:main || true

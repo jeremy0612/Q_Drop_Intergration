@@ -1,7 +1,7 @@
 """
-MUTAG experiment: QGCN on molecular graph classification.
+PROTEINS experiment: QGCN on protein graph classification.
 Standard benchmark protocol: 10-fold cross-validation.
-Dataset: 187 graphs, binary (mutagenic vs non-mutagenic), 7-dim node features.
+Dataset: 1,113 graphs, binary (enzyme vs non-enzyme), 3-dim node features.
 """
 
 import os
@@ -24,26 +24,26 @@ src_dir = os.path.dirname(os.path.abspath(__file__))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from data.load_mutag import load_mutag
+from data.load_proteins import load_proteins
 from models.Quantum_GCN import QGCN
 
 
-class MUTAGConfig:
+class PROTEINSConfig:
     epochs = 100
     lr = 0.005
-    batch_size = 16        # small dataset → small batches
+    batch_size = 32        # larger dataset → bigger batches
     q_depths = [1, 1]
     n_folds = 10
     early_stop_patience = 15
     val_frequency = 5
 
     # Dataset info (written to metrics for report)
-    dataset_name = "MUTAG"
-    dataset_source = "graphs-datasets/MUTAG"
-    n_graphs = 187
+    dataset_name = "PROTEINS"
+    dataset_source = "graphs-datasets/PROTEINS"
+    n_graphs = 1113
     n_classes = 2
-    node_feature_dim = 7
-    task = "binary classification (mutagenic vs non-mutagenic)"
+    node_feature_dim = 3
+    task = "binary classification (enzyme vs non-enzyme)"
 
 
 def train_epoch(model, loader, optimizer, criterion, device):
@@ -87,7 +87,7 @@ def run_fold(train_data, test_data, config, device, fold_idx):
     train_loader = DataLoader(train_data, batch_size=config.batch_size, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=config.batch_size)
 
-    input_dim = train_data[0].x.size(1)  # 7
+    input_dim = train_data[0].x.size(1)
     model = QGCN(
         input_dims=input_dim,
         q_depths=config.q_depths,
@@ -139,14 +139,13 @@ def run_fold(train_data, test_data, config, device, fold_idx):
     }
 
 
-def plot_results(fold_results, out_path):
+def plot_results(fold_results, out_path, config):
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    # Per-fold accuracy bar
     fold_accs = [r['accuracy'] for r in fold_results]
     mean_acc = np.mean(fold_accs)
     std_acc = np.std(fold_accs)
-    axes[0].bar(range(1, len(fold_accs) + 1), fold_accs, color='#4C72B0', edgecolor='black')
+    axes[0].bar(range(1, len(fold_accs) + 1), fold_accs, color='#55A868', edgecolor='black')
     axes[0].axhline(mean_acc, color='red', linestyle='--', label=f'Mean={mean_acc:.3f}±{std_acc:.3f}')
     axes[0].set_xlabel('Fold')
     axes[0].set_ylabel('Test Accuracy')
@@ -155,7 +154,6 @@ def plot_results(fold_results, out_path):
     axes[0].legend()
     axes[0].grid(axis='y', alpha=0.3)
 
-    # Training curves (all folds)
     for i, r in enumerate(fold_results):
         axes[1].plot(r['train_accs'], alpha=0.4, linewidth=0.8)
     axes[1].set_xlabel('Epoch')
@@ -163,11 +161,10 @@ def plot_results(fold_results, out_path):
     axes[1].set_title('Training Accuracy (All Folds)')
     axes[1].grid(alpha=0.3)
 
-    # Metrics summary bar
     metrics = ['accuracy', 'precision', 'recall', 'f1']
     means = [np.mean([r[m] for r in fold_results]) for m in metrics]
     stds = [np.std([r[m] for r in fold_results]) for m in metrics]
-    colors = ['#4C72B0', '#DD8452', '#55A868', '#C44E52']
+    colors = ['#55A868', '#4C72B0', '#DD8452', '#C44E52']
     bars = axes[2].bar(metrics, means, yerr=stds, color=colors, edgecolor='black', capsize=5)
     axes[2].set_ylim(0, 1.1)
     axes[2].set_ylabel('Score')
@@ -177,7 +174,7 @@ def plot_results(fold_results, out_path):
         axes[2].text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
                      f'{mean:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
 
-    plt.suptitle(f'QGCN on MUTAG — {mean_acc:.3f}±{std_acc:.3f} accuracy', fontweight='bold')
+    plt.suptitle(f'QGCN on PROTEINS — {mean_acc:.3f}±{std_acc:.3f} accuracy', fontweight='bold')
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
     plt.close()
@@ -185,14 +182,15 @@ def plot_results(fold_results, out_path):
 
 
 def main():
-    config = MUTAGConfig()
+    config = PROTEINSConfig()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
-    print(f"Loading MUTAG from HuggingFace...")
+    print(f"Loading PROTEINS from HuggingFace (cached after first download)...")
 
-    graphs = load_mutag()
+    graphs = load_proteins()
     labels = [int(g.y.item()) for g in graphs]
     print(f"Loaded {len(graphs)} graphs | Classes: {set(labels)}")
+    print(f"Node feature dim: {graphs[0].x.size(1)}")
 
     skf = StratifiedKFold(n_splits=config.n_folds, shuffle=True, random_state=42)
     fold_results = []
@@ -204,18 +202,17 @@ def main():
         result = run_fold(train_data, test_data, config, device, fold_idx)
         fold_results.append(result)
 
-    # Aggregate
     mean_acc = np.mean([r['accuracy'] for r in fold_results])
     std_acc = np.std([r['accuracy'] for r in fold_results])
     mean_f1 = np.mean([r['f1'] for r in fold_results])
 
     print(f"\n{'='*50}")
-    print(f"MUTAG 10-Fold CV Results")
+    print(f"PROTEINS 10-Fold CV Results")
     print(f"  Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
     print(f"  F1:       {mean_f1:.4f}")
     print(f"{'='*50}")
 
-    # Save metrics JSON (repo root for CML)
+    repo_root = os.path.join(os.path.dirname(__file__), '..')
     metrics = {
         'timestamp': datetime.now().isoformat(),
         'dataset': config.dataset_name,
@@ -248,15 +245,14 @@ def main():
             for r in fold_results
         ]
     }
-    # Save to repo root (one level up from src/)
-    repo_root = os.path.join(os.path.dirname(__file__), '..')
-    metrics_path = os.path.join(repo_root, 'mutag_metrics.json')
+
+    metrics_path = os.path.join(repo_root, 'proteins_metrics.json')
     with open(metrics_path, 'w') as f:
         json.dump(metrics, f, indent=2)
     print(f"[+] Metrics saved to {metrics_path}")
 
-    plot_path = os.path.join(repo_root, 'mutag_results.png')
-    plot_results(fold_results, plot_path)
+    plot_path = os.path.join(repo_root, 'proteins_results.png')
+    plot_results(fold_results, plot_path, config)
 
 
 if __name__ == '__main__':

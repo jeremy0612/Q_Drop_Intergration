@@ -1,7 +1,12 @@
 """
-MUTAG dataset loader from HuggingFace.
+PROTEINS dataset loader from HuggingFace.
 Converts to PyTorch Geometric Data objects.
 Caches to ~/.cache/huggingface/datasets/ (default HF behavior).
+
+Dataset: graphs-datasets/PROTEINS
+  - 1,113 protein graphs
+  - Binary: enzyme (1) vs non-enzyme (0)
+  - Node features: 3-dim (degree + 2 biochemical attributes)
 """
 
 import os
@@ -13,12 +18,12 @@ from datasets import load_dataset
 _HF_CACHE = os.environ.get("HF_DATASETS_CACHE", os.path.expanduser("~/.cache/huggingface/datasets"))
 
 
-def load_mutag(cache_dir: str = _HF_CACHE):
+def load_proteins(cache_dir: str = _HF_CACHE):
     """
-    Load MUTAG from HuggingFace (cached after first download).
-    Returns: list of torch_geometric.data.Data (187 graphs)
+    Load PROTEINS from HuggingFace (cached after first download).
+    Returns: list of torch_geometric.data.Data (1,113 graphs)
     """
-    raw = load_dataset("graphs-datasets/MUTAG", cache_dir=cache_dir)
+    raw = load_dataset("graphs-datasets/PROTEINS", cache_dir=cache_dir)
     return _convert(raw)
 
 
@@ -26,7 +31,13 @@ def _convert(raw) -> list:
     graphs = []
     for split in raw.values():
         for item in split:
-            x = torch.tensor(item['node_feat'], dtype=torch.float)
+            node_feat = item.get('node_feat')
+            if node_feat is not None:
+                x = torch.tensor(node_feat, dtype=torch.float)
+            else:
+                # Fallback: use degree as single feature if node_feat absent
+                num_nodes = item.get('num_nodes', 1)
+                x = torch.ones(num_nodes, 1, dtype=torch.float)
 
             edge_index = torch.tensor(item['edge_index'], dtype=torch.long)
             if edge_index.dim() == 2 and edge_index.shape[1] == 2:
