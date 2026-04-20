@@ -21,30 +21,31 @@ jobs:
       - name: Add npm global bin to PATH
         run: echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
 
+      - name: Set CUDA library path
+        run: |
+          CUDA_LIB=$(find /usr/local/cuda* /usr/lib/x86_64-linux-gnu -name "libcudnn.so*" \
+            -exec dirname {} \; 2>/dev/null | head -1)
+          if [ -n "$CUDA_LIB" ]; then
+            echo "LD_LIBRARY_PATH=${CUDA_LIB}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+            echo "Found cuDNN at: $CUDA_LIB"
+          else
+            echo "Warning: cuDNN not found, CUDA may not work"
+          fi
+
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118 || \
-            pip install torch torchvision
-          pip install torch-geometric datasets
-          pip install scikit-learn numpy matplotlib pandas
-          pip install pennylane pennylane-lightning
-          pip install torch-scatter torch-sparse \
-            -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)")+cu118.html \
-            || true
+          python3 -m pip install --upgrade pip setuptools wheel
+          pip3 install torch-geometric datasets
+          pip3 install scikit-learn numpy matplotlib pandas
+          pip3 install pennylane pennylane-lightning
 
       - name: Verify environment
         run: |
-          python - << 'PYEOF'
+          python3 - << 'PYEOF'
           import torch
           import torch_geometric
           import pennylane as qml
@@ -58,7 +59,7 @@ jobs:
 
       - name: Run MUTAG experiment
         run: |
-          cd src && python train_mutag.py
+          cd src && python3 train_mutag.py
 
       - name: Generate CML report
         env:
