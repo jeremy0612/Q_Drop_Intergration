@@ -145,16 +145,6 @@ class TrainingConfig:
     train_samples = 500       # Training set size
 ```
 
-## Expected Results
-
-Performance on MNIST (digit 3 vs 6):
-
-| Algorithm | Test Accuracy |
-|-----------|---------------|
-| Pruning Only | ~65-75% |
-| Dropout Only | ~60-70% |
-| Combined | ~68-78% |
-
 ## Key Files
 
 - **`code/utils/pruning.py`** – `ScheduledGradientPruning` class
