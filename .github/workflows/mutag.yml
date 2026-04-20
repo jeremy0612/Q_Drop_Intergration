@@ -1,0 +1,126 @@
+name: MUTAG Experiment - QGCN Graph Classification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/train_mutag.py'
+      - 'src/data/load_mutag.py'
+      - 'src/models/**'
+      - '.github/workflows/mutag.yml'
+  workflow_dispatch:
+
+jobs:
+  mutag:
+    runs-on: [A6000]
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Add npm global bin to PATH
+        run: echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118 || \
+            pip install torch torchvision
+          pip install torch-geometric datasets
+          pip install scikit-learn numpy matplotlib pandas
+          pip install pennylane pennylane-lightning
+          pip install torch-scatter torch-sparse \
+            -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)")+cu118.html \
+            || true
+
+      - name: Verify environment
+        run: |
+          python - << 'PYEOF'
+          import torch
+          import torch_geometric
+          import pennylane as qml
+          from datasets import load_dataset
+          print(f"PyTorch: {torch.__version__}")
+          print(f"PyG: {torch_geometric.__version__}")
+          print(f"PennyLane: {qml.__version__}")
+          print(f"CUDA: {torch.cuda.is_available()}")
+          print("Imports OK")
+          PYEOF
+
+      - name: Run MUTAG experiment
+        run: |
+          cd src && python train_mutag.py
+
+      - name: Generate CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cml ci
+
+          python - << 'PYEOF' > report.md
+          import json, os
+          metrics_path = 'mutag_metrics.json'
+          with open(metrics_path) as f:
+              m = json.load(f)
+
+          lines = []
+          lines.append('# MUTAG Experiment Report — QGCN Graph Classification')
+          lines.append('')
+          lines.append(f"**Timestamp:** {m['timestamp']}")
+          lines.append(f"**Dataset:** MUTAG (187 molecular graphs, binary classification)")
+          lines.append(f"**Model:** {m['model']}")
+          lines.append(f"**Protocol:** {m['n_folds']}-fold cross-validation")
+          lines.append('')
+          lines.append('## Summary')
+          lines.append('')
+          lines.append('| Metric | Mean | Std |')
+          lines.append('|--------|:----:|:---:|')
+          lines.append(f"| Accuracy | {m['mean_accuracy']:.4f} | {m['std_accuracy']:.4f} |")
+          lines.append(f"| F1 Score | {m['mean_f1']:.4f} | — |")
+          lines.append('')
+          lines.append('## Per-Fold Results')
+          lines.append('')
+          lines.append('| Fold | Accuracy | F1 | Precision | Recall |')
+          lines.append('|------|:--------:|:--:|:---------:|:------:|')
+          for i, fold in enumerate(m['per_fold']):
+              lines.append(f"| {i+1} | {fold['accuracy']:.4f} | {fold['f1']:.4f} | {fold['precision']:.4f} | {fold['recall']:.4f} |")
+          lines.append('')
+          print('\n'.join(lines))
+          PYEOF
+
+          if [ -f mutag_results.png ]; then
+            echo "## Results Visualization" >> report.md
+            echo "" >> report.md
+            echo "![MUTAG Results](./mutag_results.png)" >> report.md
+          fi
+
+          cml comment create report.md
+
+      - name: Save artifacts
+        if: always()
+        run: |
+          ARTIFACT_DIR="/tmp/mutag-${GITHUB_RUN_ID}"
+          mkdir -p "$ARTIFACT_DIR"
+          cp mutag_metrics.json "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp mutag_results.png "$ARTIFACT_DIR/" 2>/dev/null || true
+          ls -lah "$ARTIFACT_DIR"
+          echo "Artifacts: $ARTIFACT_DIR"
+
+      - name: Commit metrics
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cp mutag_metrics.json mutag_baseline.json
+          git config user.email "ci@example.com"
+          git config user.name "CI Bot"
+          git add mutag_baseline.json
+          git commit -m "metrics: update MUTAG baseline" || true
+          git push origin HEAD:main || true

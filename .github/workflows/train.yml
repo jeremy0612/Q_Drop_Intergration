@@ -2,7 +2,7 @@ name: Q-Drop QGN Integration Training Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
 
 jobs:
   train:
@@ -125,7 +125,7 @@ jobs:
       - name: Commit metrics (on push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp ../metrics.json baseline.json
+          cp metrics.json baseline.json
           git config user.email "ci@example.com"
           git config user.name "CI Bot"
           git add baseline.json
