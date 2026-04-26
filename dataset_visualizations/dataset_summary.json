@@ -1,0 +1,32 @@
+{
+  "mutag": {
+    "n_graphs": 188,
+    "feature_dim": 7,
+    "class_counts": {
+      "0": 63,
+      "1": 125
+    },
+    "nodes_mean": 17.930851063829788,
+    "nodes_std": 4.575664737098715,
+    "edges_mean": 39.58510638297872,
+    "edges_std": 11.368966320710456,
+    "density_mean": 0.1384540671648269,
+    "density_std": 0.035052231638973495,
+    "figure": "dataset_visualizations/mutag_dataset_visualization.png"
+  },
+  "proteins": {
+    "n_graphs": 1113,
+    "feature_dim": 3,
+    "class_counts": {
+      "0": 663,
+      "1": 450
+    },
+    "nodes_mean": 39.05750224618149,
+    "nodes_std": 45.758421863948776,
+    "edges_mean": 145.6316262353998,
+    "edges_std": 169.19809006257566,
+    "density_mean": 0.21217560910427083,
+    "density_std": 0.19798650141763133,
+    "figure": "dataset_visualizations/proteins_dataset_visualization.png"
+  }
+}
