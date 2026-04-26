@@ -72,6 +72,33 @@ cd code
 python train_mnist.py
 ```
 
+Train quantum graph models on MUTAG and PROTEINS (unified script):
+
+```bash
+cd Q-Drop-Integration/src
+python train_quantum_models.py --datasets mutag proteins
+```
+
+Run with Q-Drop modes on HQGC quantum weights:
+
+```bash
+python train_quantum_models.py --datasets mutag proteins --algorithm both
+```
+
+Run vulnerability QGAT pipeline from this folder:
+
+```bash
+cd Q-Drop-Integration
+python src/train_vulnerability_qgat.py
+```
+
+Generate vulnerability IEEE figures from this folder:
+
+```bash
+cd Q-Drop-Integration
+python src/plot_vulnerability_ieee.py
+```
+
 This will:
 1. Load and preprocess MNIST (binary classification: digit 3 vs digit 6)
 2. Train with **Scheduled Gradient Pruning** only
