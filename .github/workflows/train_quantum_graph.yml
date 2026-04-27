@@ -1,0 +1,291 @@
+name: Quantum Graph Training — MUTAG & PROTEINS
+
+on:
+  push:
+    branches: [feat/torch_qdrop]
+  pull_request:
+    branches: [feat/torch_qdrop]
+  workflow_dispatch:
+    inputs:
+      algorithm:
+        description: "Q-Drop mode: baseline | pruning | dropout | both"
+        required: false
+        default: "baseline"
+      epochs:
+        description: "Max training epochs per fold"
+        required: false
+        default: "100"
+
+jobs:
+  train:
+    runs-on: [A6000]
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      TORCH_VERSION: "2.4.0"
+      CUDA_TAG: "cu121"
+      OUTPUT_DIR: ci_results
+
+    steps:
+      - name: Add npm global bin to PATH
+        run: echo "$HOME/.npm-global/bin" >> $GITHUB_PATH
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: System info
+        run: |
+          echo "=== System ==="
+          uname -a
+          nvidia-smi || echo "No GPU detected"
+          echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-all}"
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install PyTorch (CUDA 12.1)
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+
+      - name: Install PyTorch Geometric
+        run: |
+          pip install torch-geometric
+          pip install torch-scatter torch-sparse torch-cluster torch-spline-conv \
+            -f https://data.pyg.org/whl/torch-${{ env.TORCH_VERSION }}+${{ env.CUDA_TAG }}.html
+
+      - name: Install training dependencies
+        run: |
+          pip install \
+            "pennylane>=0.39.0" \
+            "pennylane-lightning>=0.39.0" \
+            "scikit-learn>=1.3.0" \
+            "numpy>=1.24.0" \
+            "matplotlib>=3.7.0" \
+            "tqdm>=4.66.0" \
+            "datasets>=2.18.0"
+
+      - name: Verify environment
+        run: |
+          python - << 'PYEOF'
+          import torch, torch_geometric, pennylane, sklearn, numpy, datasets
+          print(f"PyTorch:        {torch.__version__}")
+          print(f"CUDA available: {torch.cuda.is_available()}")
+          if torch.cuda.is_available():
+              print(f"GPU:            {torch.cuda.get_device_name(0)}")
+              props = torch.cuda.get_device_properties(0)
+              print(f"VRAM:           {props.total_memory / 1e9:.1f} GB")
+          print(f"PyG:            {torch_geometric.__version__}")
+          print(f"PennyLane:      {pennylane.__version__}")
+          print(f"scikit-learn:   {sklearn.__version__}")
+          print(f"NumPy:          {numpy.__version__}")
+          print(f"HF datasets:    {datasets.__version__}")
+          PYEOF
+
+      - name: Run training — MUTAG & PROTEINS
+        env:
+          ALGORITHM: ${{ github.event.inputs.algorithm || 'baseline' }}
+          EPOCHS: ${{ github.event.inputs.epochs || '100' }}
+        run: |
+          echo "Q-Drop algorithm : $ALGORITHM"
+          echo "Max epochs       : $EPOCHS"
+          python src/train_quantum_models.py \
+            --datasets mutag proteins \
+            --epochs "$EPOCHS" \
+            --algorithm "$ALGORITHM" \
+            --output-dir "$OUTPUT_DIR" \
+            --seed 42
+          echo "ALGORITHM=$ALGORITHM" >> $GITHUB_ENV
+
+      - name: Locate results directory
+        run: |
+          RESULTS_DIR=$(ls -dt "$OUTPUT_DIR"/quantum_graph_training_* 2>/dev/null | head -1)
+          if [ -z "$RESULTS_DIR" ]; then
+            echo "ERROR: no training output found under $OUTPUT_DIR"
+            exit 1
+          fi
+          echo "RESULTS_DIR=$RESULTS_DIR" >> $GITHUB_ENV
+          echo "Results at: $RESULTS_DIR"
+          ls -lah "$RESULTS_DIR"
+
+      - name: Generate CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cml ci
+
+          python - << 'PYEOF' > report.md
+          import json, os
+          from pathlib import Path
+
+          results_dir = Path(os.environ["RESULTS_DIR"])
+          algorithm   = os.environ.get("ALGORITHM", "baseline")
+          ref         = os.environ.get("GITHUB_REF_NAME", "unknown")
+          sha         = os.environ.get("GITHUB_SHA", "")[:8]
+          run_id      = os.environ.get("GITHUB_RUN_ID", "")
+          repo        = os.environ.get("GITHUB_REPOSITORY", "")
+
+          with open(results_dir / "summary.json") as f:
+              summary = json.load(f)
+
+          METRICS = ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]
+
+          run_url = f"https://github.com/{repo}/actions/runs/{run_id}" if repo and run_id else "#"
+          lines = [
+              "# Quantum Graph Training Report — MUTAG & PROTEINS",
+              "",
+              f"**Branch:** `{ref}` | **Commit:** `{sha}` | **Run:** [{run_id}]({run_url})",
+              f"**Algorithm:** `{algorithm}` | **Model:** QGCN",
+              "",
+          ]
+
+          for dataset_key, result in summary.items():
+              dataset = result.get("dataset", dataset_key.upper())
+              cfg     = result.get("config", {})
+              agg     = result.get("summary", {})
+              folds   = result.get("folds", [])
+
+              lines += [
+                  f"## {dataset}",
+                  "",
+                  "### Configuration",
+                  "",
+                  "| Parameter | Value |",
+                  "|-----------|-------|",
+                  f"| Epochs | {cfg.get('epochs')} |",
+                  f"| Learning rate | {cfg.get('lr')} |",
+                  f"| Weight decay | {cfg.get('weight_decay')} |",
+                  f"| Batch size | {cfg.get('batch_size')} |",
+                  f"| Q-depths | {cfg.get('q_depths')} |",
+                  f"| Folds | {cfg.get('n_folds')} |",
+                  f"| Early stop patience | {cfg.get('early_stop_patience')} |",
+                  f"| Grad clip | {cfg.get('grad_clip')} |",
+                  f"| LR scheduler | {cfg.get('use_scheduler')} |",
+                  f"| Class weights | {cfg.get('use_class_weights')} |",
+                  f"| Seed | {cfg.get('seed')} |",
+                  "",
+                  "### Aggregate Results (mean ± std, 10-fold CV)",
+                  "",
+                  "| Metric | Mean | Std |",
+                  "|--------|-----:|----:|",
+              ]
+              for m in METRICS:
+                  mean = agg.get(f"mean_{m}", float("nan"))
+                  std  = agg.get(f"std_{m}", float("nan"))
+                  lines.append(f"| {m.upper()} | {mean:.4f} | ±{std:.4f} |")
+
+              lines += [
+                  "",
+                  "### Per-Fold Results",
+                  "",
+                  "| Fold | Test Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
+                  "|:----:|----------:|" + "|------:" * len(METRICS) + "|",
+              ]
+              for fold in folds:
+                  vals = " | ".join(f"{fold.get(m, 0.0):.4f}" for m in METRICS)
+                  lines.append(f"| {fold['fold']} | {fold.get('test_loss', 0.0):.4f} | {vals} |")
+
+              # Best fold epoch-level curves in a collapsible block
+              best_fold = max(folds, key=lambda r: r.get("accuracy", 0.0), default=None)
+              if best_fold and best_fold.get("val_curve"):
+                  vcurve = best_fold["val_curve"]
+                  lines += [
+                      "",
+                      f"<details>",
+                      f"<summary>Best fold (fold {best_fold['fold']}, acc={best_fold.get('accuracy', 0):.4f})"
+                      f" — epoch-level validation metrics</summary>",
+                      "",
+                      "| Epoch | Val Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
+                      "|------:|---------:|" + "|------:" * len(METRICS) + "|",
+                  ]
+                  for ep in vcurve:
+                      ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
+                      lines.append(f"| {ep['epoch']} | {ep.get('loss', 0.0):.4f} | {ep_vals} |")
+                  lines.append("</details>")
+
+              if best_fold and best_fold.get("train_curve"):
+                  tcurve = best_fold["train_curve"]
+                  lines += [
+                      "",
+                      f"<details>",
+                      f"<summary>Best fold (fold {best_fold['fold']}) — epoch-level train metrics</summary>",
+                      "",
+                      "| Epoch | Train Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
+                      "|------:|-----------:|" + "|------:" * len(METRICS) + "|",
+                  ]
+                  for ep in tcurve:
+                      ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
+                      lines.append(f"| {ep['epoch']} | {ep.get('loss', 0.0):.4f} | {ep_vals} |")
+                  lines.append("</details>")
+
+              lines.append("")
+
+          # Baseline comparison
+          baseline_path = Path("quantum_graph_baseline.json")
+          if baseline_path.exists():
+              with open(baseline_path) as f:
+                  baseline = json.load(f)
+              lines += [
+                  "## Baseline Comparison",
+                  "",
+                  "| Dataset | Metric | Baseline | Current | Delta | Status |",
+                  "|---------|--------|:--------:|:-------:|------:|--------|",
+              ]
+              for dataset_key in summary:
+                  curr_agg = summary[dataset_key].get("summary", {})
+                  base_agg = baseline.get(dataset_key, {}).get("summary", {})
+                  dataset  = summary[dataset_key].get("dataset", dataset_key.upper())
+                  for m in ["accuracy", "f1", "roc_auc", "pr_auc"]:
+                      curr  = curr_agg.get(f"mean_{m}", float("nan"))
+                      base  = base_agg.get(f"mean_{m}", float("nan"))
+                      delta = curr - base
+                      sign  = "+" if delta >= 0 else ""
+                      if delta > 0.005:
+                          status = "✅ Improved"
+                      elif delta < -0.01:
+                          status = "❌ Regression"
+                      else:
+                          status = "➡ Stable"
+                      lines.append(
+                          f"| {dataset} | {m.upper()} | {base:.4f} | {curr:.4f}"
+                          f" | {sign}{delta:.4f} | {status} |"
+                      )
+              lines.append("")
+          else:
+              lines += [
+                  "",
+                  "> No baseline found — this run will become the baseline on merge to `main`.",
+                  "",
+              ]
+
+          print("\n".join(lines))
+          PYEOF
+
+          cml comment create report.md
+
+      - name: Upload training artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quantum-graph-metrics-${{ github.run_id }}
+          path: |
+            ${{ env.RESULTS_DIR }}/summary.json
+            ${{ env.RESULTS_DIR }}/mutag/metrics.json
+            ${{ env.RESULTS_DIR }}/proteins/metrics.json
+          retention-days: 30
+
+      - name: Commit baseline on main push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cp "$RESULTS_DIR/summary.json" quantum_graph_baseline.json
+          git config user.email "ci@example.com"
+          git config user.name "CI Bot"
+          git add quantum_graph_baseline.json
+          git commit -m "metrics: update quantum-graph baseline [skip ci]" || true
+          git push origin HEAD:main || true
