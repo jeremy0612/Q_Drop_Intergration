@@ -87,7 +87,7 @@ jobs:
 
       - name: Run training — MUTAG & PROTEINS
         env:
-          ALGORITHM: ${{ github.event.inputs.algorithm || 'baseline' }}
+          ALGORITHM: ${{ github.event.inputs.algorithm || 'both' }}
           EPOCHS: ${{ github.event.inputs.epochs || '100' }}
         run: |
           echo "Q-Drop algorithm : $ALGORITHM"
@@ -188,38 +188,41 @@ jobs:
                   vals = " | ".join(f"{fold.get(m, 0.0):.4f}" for m in METRICS)
                   lines.append(f"| {fold['fold']} | {fold.get('test_loss', 0.0):.4f} | {vals} |")
 
-              # Best fold epoch-level curves in a collapsible block
+              # Best fold epoch-level curves in collapsible blocks
               best_fold = max(folds, key=lambda r: r.get("accuracy", 0.0), default=None)
-              if best_fold and best_fold.get("val_curve"):
-                  vcurve = best_fold["val_curve"]
-                  lines += [
-                      "",
-                      f"<details>",
-                      f"<summary>Best fold (fold {best_fold['fold']}, acc={best_fold.get('accuracy', 0):.4f})"
-                      f" — epoch-level validation metrics</summary>",
-                      "",
-                      "| Epoch | Val Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
-                      "|------:|---------:|" + "|------:" * len(METRICS) + "|",
-                  ]
-                  for ep in vcurve:
-                      ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
-                      lines.append(f"| {ep['epoch']} | {ep.get('loss', 0.0):.4f} | {ep_vals} |")
-                  lines.append("</details>")
+              if best_fold:
+                  fold_num = best_fold["fold"]
+                  fold_acc = best_fold.get("accuracy", 0.0)
 
-              if best_fold and best_fold.get("train_curve"):
-                  tcurve = best_fold["train_curve"]
-                  lines += [
-                      "",
-                      f"<details>",
-                      f"<summary>Best fold (fold {best_fold['fold']}) — epoch-level train metrics</summary>",
-                      "",
-                      "| Epoch | Train Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
-                      "|------:|-----------:|" + "|------:" * len(METRICS) + "|",
-                  ]
-                  for ep in tcurve:
-                      ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
-                      lines.append(f"| {ep['epoch']} | {ep.get('loss', 0.0):.4f} | {ep_vals} |")
-                  lines.append("</details>")
+                  if best_fold.get("val_curve"):
+                      vcurve = best_fold["val_curve"]
+                      stag = "<summary>Fold " + str(fold_num) + " (best, acc=" + f"{fold_acc:.4f}" + ") - val metrics per epoch</summary>"
+                      lines += [
+                          "",
+                          "<details>" + stag,
+                          "",
+                          "| Epoch | Val Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
+                          "|------:|---------:|" + "|------:" * len(METRICS) + "|",
+                      ]
+                      for ep in vcurve:
+                          ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
+                          lines.append("| " + str(ep["epoch"]) + " | " + f"{ep.get('loss', 0.0):.4f}" + " | " + ep_vals + " |")
+                      lines += ["", "</details>"]
+
+                  if best_fold.get("train_curve"):
+                      tcurve = best_fold["train_curve"]
+                      stag = "<summary>Fold " + str(fold_num) + " (best) - train metrics per epoch</summary>"
+                      lines += [
+                          "",
+                          "<details>" + stag,
+                          "",
+                          "| Epoch | Train Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
+                          "|------:|-----------:|" + "|------:" * len(METRICS) + "|",
+                      ]
+                      for ep in tcurve:
+                          ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
+                          lines.append("| " + str(ep["epoch"]) + " | " + f"{ep.get('loss', 0.0):.4f}" + " | " + ep_vals + " |")
+                      lines += ["", "</details>"]
 
               lines.append("")
 
