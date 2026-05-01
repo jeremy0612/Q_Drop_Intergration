@@ -15,6 +15,10 @@ on:
         description: "Max training epochs per fold"
         required: false
         default: "100"
+      n_qubits:
+        description: "Quantum tensor width override: 8 or 16"
+        required: false
+        default: "16"
 
 jobs:
   train:
@@ -89,15 +93,27 @@ jobs:
         env:
           ALGORITHM: ${{ github.event.inputs.algorithm || 'both' }}
           EPOCHS: ${{ github.event.inputs.epochs || '100' }}
+          N_QUBITS: ${{ github.event.inputs.n_qubits || '' }}
         run: |
           echo "Q-Drop algorithm : $ALGORITHM"
           echo "Max epochs       : $EPOCHS"
-          python src/train_quantum_models.py \
-            --datasets mutag proteins \
-            --epochs "$EPOCHS" \
-            --algorithm "$ALGORITHM" \
-            --output-dir "$OUTPUT_DIR" \
-            --seed 42
+          if [ -n "$N_QUBITS" ]; then
+            echo "Quantum width    : $N_QUBITS"
+            python src/train_quantum_models.py \
+              --datasets mutag proteins \
+              --epochs "$EPOCHS" \
+              --algorithm "$ALGORITHM" \
+              --n-qubits "$N_QUBITS" \
+              --output-dir "$OUTPUT_DIR" \
+              --seed 42
+          else
+            python src/train_quantum_models.py \
+              --datasets mutag proteins \
+              --epochs "$EPOCHS" \
+              --algorithm "$ALGORITHM" \
+              --output-dir "$OUTPUT_DIR" \
+              --seed 42
+          fi
           echo "ALGORITHM=$ALGORITHM" >> $GITHUB_ENV
 
       - name: Locate results directory
@@ -337,6 +353,7 @@ jobs:
               ("Weight decay", reference_config.get("weight_decay")),
               ("Batch size", reference_config.get("batch_size")),
               ("Q-depths", reference_config.get("q_depths")),
+              ("Quantum width", reference_config.get("n_qubits")),
               ("Folds", reference_config.get("n_folds")),
               ("Early stop patience", reference_config.get("early_stop_patience")),
               ("Validation frequency", reference_config.get("val_frequency")),
@@ -409,6 +426,7 @@ jobs:
                   f"| Weight decay | {format_scalar(cfg.get('weight_decay'))} |",
                   f"| Batch size | {format_scalar(cfg.get('batch_size'))} |",
                   f"| Q-depths | {format_scalar(cfg.get('q_depths'))} |",
+                  f"| Quantum width | {format_scalar(cfg.get('n_qubits'))} |",
                   f"| Folds | {format_scalar(cfg.get('n_folds'))} |",
                   f"| Early stop patience | {format_scalar(cfg.get('early_stop_patience'))} |",
                   f"| Validation frequency | {format_scalar(cfg.get('val_frequency'))} |",
@@ -447,47 +465,13 @@ jobs:
                   "### Per-Fold Results",
                   "",
                   "| Fold | Test Loss | " + " | ".join(metric.upper() for metric in metrics) + " |",
-                  "|------|-----------|" + "|----------|" * len(metrics) + "|",
+                  "|" + " --- |" * (len(metrics) + 2),
               ]
               for fold in folds:
                   fold_values = " | ".join(format_scalar(fold.get(metric)) for metric in metrics)
                   lines.append(
                       f"| {fold['fold']} | {format_scalar(fold.get('test_loss'))} | {fold_values} |"
                   )
-
-              if best_fold is not None and best_fold.get("val_curve"):
-                  lines += [
-                      "",
-                      "<details><summary>Best fold validation metrics by epoch</summary>",
-                      "",
-                      "| Epoch | Val Loss | " + " | ".join(metric.upper() for metric in metrics) + " |",
-                      "|------:|---------:|" + "|----------:" * len(metrics) + "|",
-                  ]
-                  for epoch_metrics in best_fold["val_curve"]:
-                      values = " | ".join(
-                          format_scalar(epoch_metrics.get(metric)) for metric in metrics
-                      )
-                      lines.append(
-                          f"| {epoch_metrics['epoch']} | {format_scalar(epoch_metrics.get('loss'))} | {values} |"
-                      )
-                  lines += ["", "</details>"]
-
-              if best_fold is not None and best_fold.get("train_curve"):
-                  lines += [
-                      "",
-                      "<details><summary>Best fold training metrics by epoch</summary>",
-                      "",
-                      "| Epoch | Train Loss | " + " | ".join(metric.upper() for metric in metrics) + " |",
-                      "|------:|-----------:|" + "|----------:" * len(metrics) + "|",
-                  ]
-                  for epoch_metrics in best_fold["train_curve"]:
-                      values = " | ".join(
-                          format_scalar(epoch_metrics.get(metric)) for metric in metrics
-                      )
-                      lines.append(
-                          f"| {epoch_metrics['epoch']} | {format_scalar(epoch_metrics.get('loss'))} | {values} |"
-                      )
-                  lines += ["", "</details>"]
 
           baseline_path = Path("quantum_graph_baseline.json")
           if baseline_path.exists():

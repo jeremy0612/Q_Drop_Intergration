@@ -11,12 +11,25 @@ except ImportError:
 class QGCN(Module):
     """QGCN with Linear classifier only."""
 
-    def __init__(self, input_dims, q_depths, output_dims, activ_fn=LeakyReLU(0.2), classifier=None, readout=False):
+    def __init__(
+        self,
+        input_dims,
+        q_depths,
+        output_dims,
+        activ_fn=LeakyReLU(0.2),
+        classifier=None,
+        readout=False,
+        n_qubits=None,
+    ):
 
         super().__init__()
         layers = []
         max_qubits = 16
-        n_qubits = min(input_dims, max_qubits)
+        if n_qubits is None:
+            n_qubits = min(input_dims, max_qubits)
+        else:
+            n_qubits = min(n_qubits, max_qubits)
+
         if n_qubits > 8:
             n_qubits = 16
         else:

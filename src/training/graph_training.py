@@ -64,6 +64,7 @@ class GraphTrainConfig:
     weight_decay: float = 1e-3
     batch_size: int = 32
     q_depths: Tuple[int, int] = (1, 1)
+    n_qubits: Optional[int] = None
     n_folds: int = 10
     early_stop_patience: int = 15
     val_frequency: int = 5
@@ -165,6 +166,7 @@ def build_model(input_dims: int, config: GraphTrainConfig) -> nn.Module:
         output_dims=1,
         activ_fn=LeakyReLU(0.2),
         readout=False,
+        n_qubits=config.n_qubits,
     )
 
 
@@ -374,6 +376,7 @@ def serialize_result_payload(
             "weight_decay": config.weight_decay,
             "batch_size": config.batch_size,
             "q_depths": list(config.q_depths),
+            "n_qubits": config.n_qubits,
             "n_folds": config.n_folds,
             "early_stop_patience": config.early_stop_patience,
             "val_frequency": config.val_frequency,
@@ -474,6 +477,7 @@ def build_train_parser(
     parser.add_argument("--weight-decay", type=float, default=default_weight_decay)
     parser.add_argument("--batch-size", type=int, default=default_batch_size)
     parser.add_argument("--q-depths", nargs="+", type=int, default=[1, 1])
+    parser.add_argument("--n-qubits", type=int, default=None, help="Override quantum tensor width (bucketed to 8 or 16)")
     parser.add_argument("--folds", type=int, default=10)
     parser.add_argument("--early-stop-patience", type=int, default=15)
     parser.add_argument("--val-frequency", type=int, default=5)
@@ -515,6 +519,7 @@ def config_from_args(args: argparse.Namespace) -> GraphTrainConfig:
         weight_decay=args.weight_decay,
         batch_size=args.batch_size,
         q_depths=tuple(args.q_depths),
+        n_qubits=args.n_qubits,
         n_folds=args.folds,
         early_stop_patience=args.early_stop_patience,
         val_frequency=args.val_frequency,
