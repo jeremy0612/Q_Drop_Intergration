@@ -191,7 +191,7 @@ The quantum circuit replaces the `Wx` linear transformation with a variational q
 
 ### 2.5 QGCN Full Model
 
-Defined in [Quantum_GCN.py](HQGC-Hybrid-Quantum-Classical-Graph-Convolutional-Network/code/models/Quantum_GCN.py):
+Defined in [quantum_GCN.py](HQGC-Hybrid-Quantum-Classical-Graph-Convolutional-Network/code/models/quantum_GCN.py):
 
 ```
 Graph input (x, edge_index, batch)

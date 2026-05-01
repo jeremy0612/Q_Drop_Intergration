@@ -38,6 +38,10 @@ class TorchQDropRuntime:
     def current_prune_ratio(self) -> float:
         return self.session.current_prune_ratio
 
+    @property
+    def quantum_scalar_count(self) -> int:
+        return self.session.quantum_scalar_count
+
     def start_epoch(self, epoch: int) -> None:
         self.session.start_epoch(epoch)
 
@@ -59,6 +63,9 @@ class TorchQDropRuntime:
 
     def clear_forward_masks(self) -> None:
         self.session.clear_forward_masks()
+
+    def describe_state(self) -> dict:
+        return self.session.describe_state()
 
     # Backward compatibility with previous runtime API.
     def apply(self) -> None:

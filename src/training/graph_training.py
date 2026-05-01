@@ -194,6 +194,53 @@ def build_qdrop_manager(model: nn.Module, config: GraphTrainConfig):
     )
 
 
+def format_qdrop_status(qdrop_manager: TorchQDropRuntime) -> str:
+    state = qdrop_manager.describe_state()
+    parts = [
+        f"mode={state['active_step_mode']}",
+        f"phase={'accum' if state['accumulate_phase'] else 'prune'}",
+        f"a={state['accumulate_remaining']}",
+        f"p={state['prune_remaining']}",
+        f"r={state['current_prune_ratio']:.3f}",
+        f"ps={state['pruning_step_count']}",
+    ]
+
+    if state["dropout_enabled"]:
+        drop_parts = []
+        for layer_id, dropped_wires in state["active_dropout_states"].items():
+            wire_text = ",".join(str(wire_id) for wire_id in dropped_wires)
+            drop_parts.append(f"{layer_id}[{wire_text}]")
+        parts.append("drop=" + ";".join(drop_parts))
+    else:
+        parts.append("drop=off")
+
+    return " | ".join(parts)
+
+
+def snapshot_qdrop_state(qdrop_manager: TorchQDropRuntime, epoch: int) -> dict:
+    state = qdrop_manager.describe_state()
+    active_dropout_states = state["active_dropout_states"]
+    dropped_wire_count = sum(len(dropped_wires) for dropped_wires in active_dropout_states.values())
+    return {
+        "epoch": epoch,
+        "mode": state["active_step_mode"],
+        "phase": "accumulate" if state["accumulate_phase"] else "prune",
+        "is_prune_phase": 0 if state["accumulate_phase"] else 1,
+        "dropout_enabled": 1 if state["dropout_enabled"] else 0,
+        "active_dropout_layers": len(active_dropout_states),
+        "dropped_wire_count": dropped_wire_count,
+        "accumulate_remaining": state["accumulate_remaining"],
+        "prune_remaining": state["prune_remaining"],
+        "pruning_step_count": state["pruning_step_count"],
+        "prune_ratio": state["current_prune_ratio"],
+        "quantum_param_count": state["quantum_param_count"],
+        "quantum_scalar_count": state["quantum_scalar_count"],
+        "dropped_wires_by_layer": {
+            layer_id: list(dropped_wires) for layer_id, dropped_wires in active_dropout_states.items()
+        },
+    }
+
+
 def run_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -290,14 +337,20 @@ def train_fold(
 
     qdrop_manager = build_qdrop_manager(model, config)
     if config.algorithm != "baseline":
-        print(f"  Q-Drop mode: {config.algorithm} | quantum tensors: {qdrop_manager.quantum_param_count}")
+        print(
+            f"  Q-Drop mode: {config.algorithm} | "
+            f"quantum tensors: {qdrop_manager.quantum_param_count} | "
+            f"quantum scalars: {qdrop_manager.quantum_scalar_count}"
+        )
 
     stopper = EarlyStopping(config.early_stop_patience)
     train_curve = []
     val_curve = []
+    qdrop_curve = []
 
     print(f"  Fold {fold_idx + 1}: training...")
-    for epoch in tqdm(range(1, config.epochs + 1), leave=False, desc=f"{dataset_name}-F{fold_idx + 1}"):
+    progress = tqdm(range(1, config.epochs + 1), leave=False, desc=f"{dataset_name}-F{fold_idx + 1}")
+    for epoch in progress:
         train_loss, train_metrics = run_epoch(
             model=model,
             loader=train_loader,
@@ -311,6 +364,10 @@ def train_fold(
         )
         train_curve.append({"epoch": epoch, "loss": train_loss, **train_metrics})
 
+        if config.algorithm != "baseline":
+            qdrop_curve.append(snapshot_qdrop_state(qdrop_manager, epoch))
+            progress.set_postfix_str(format_qdrop_status(qdrop_manager))
+
         if epoch % config.val_frequency != 0 and epoch != config.epochs:
             continue
 
@@ -322,6 +379,13 @@ def train_fold(
             qdrop_manager=qdrop_manager,
         )
         val_curve.append({"epoch": epoch, "loss": val_loss, **val_metrics})
+
+        if config.algorithm != "baseline":
+            print(
+                f"    Epoch {epoch}: "
+                f"train_loss={train_loss:.4f}, val_acc={val_metrics['accuracy']:.4f} | "
+                f"{format_qdrop_status(qdrop_manager)}"
+            )
 
         if stopper.step(val_metrics["accuracy"], model):
             print(f"    Early stopping at epoch {epoch} (best val acc: {stopper.best_score:.4f})")
@@ -349,6 +413,7 @@ def train_fold(
         **test_metrics,
         "train_curve": train_curve,
         "val_curve": val_curve,
+        "qdrop_curve": qdrop_curve,
     }
 
 

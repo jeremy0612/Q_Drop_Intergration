@@ -38,6 +38,33 @@ class QDropSession:
     def quantum_param_count(self) -> int:
         return len(self.units)
 
+    @property
+    def quantum_scalar_count(self) -> int:
+        total = 0
+        for unit in self.units.values():
+            parameter = unit.spec.parameter
+            if hasattr(parameter, "numel"):
+                total += int(parameter.numel())
+        return total
+
+    def describe_state(self) -> dict:
+        return {
+            "epoch": self.current_epoch,
+            "dropout_enabled": self.dropout_enabled,
+            "active_dropout_states": {
+                layer_id: tuple(state.dropped_wires)
+                for layer_id, state in self.active_dropout_states.items()
+            },
+            "accumulate_phase": self.accumulate_phase,
+            "active_step_mode": self._active_step_mode,
+            "accumulate_remaining": self.accumulate_count,
+            "prune_remaining": self.prune_count,
+            "pruning_step_count": self.pruning_step_count,
+            "current_prune_ratio": self.current_prune_ratio,
+            "quantum_param_count": self.quantum_param_count,
+            "quantum_scalar_count": self.quantum_scalar_count,
+        }
+
     def clear_forward_masks(self) -> None:
         self.dropout_enabled = False
         self.active_dropout_states = {}

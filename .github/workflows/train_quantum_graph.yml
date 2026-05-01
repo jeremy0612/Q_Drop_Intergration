@@ -52,6 +52,10 @@ jobs:
         with:
           python-version: "3.10"
 
+    #   - name: Install CML
+    #     run: |
+    #       npm install -g @dvcorg/cml
+
       - name: Install PyTorch (CUDA 12.1)
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -129,6 +133,7 @@ jobs:
 
       - name: Generate CML report
         env:
+          MPLCONFIGDIR: /tmp/matplotlib
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cml ci
@@ -189,6 +194,7 @@ jobs:
 
           overview_chart = assets_dir / "quantum_graph_overview.png"
           curve_chart = assets_dir / "quantum_graph_learning_curves.png"
+          qdrop_chart = assets_dir / "quantum_graph_qdrop_progress.png"
 
           if ordered_keys:
               metric_labels = ["Accuracy", "F1", "ROC AUC", "PR AUC"]
@@ -311,6 +317,107 @@ jobs:
               figure.tight_layout()
               figure.savefig(curve_chart, dpi=200, bbox_inches="tight")
               plt.close(figure)
+
+              if algorithm in {"pruning", "dropout", "both"}:
+                  figure, axes = plt.subplots(
+                      len(ordered_keys),
+                      2,
+                      figsize=(14, 4.5 * max(len(ordered_keys), 1)),
+                      squeeze=False,
+                  )
+                  for row_index, dataset_key in enumerate(ordered_keys):
+                      result = summary[dataset_key]
+                      dataset_label = result.get("dataset", dataset_key.upper())
+                      best_fold = select_best_fold(result)
+                      phase_axis = axes[row_index][0]
+                      drop_axis = axes[row_index][1]
+
+                      if best_fold is None:
+                          phase_axis.set_axis_off()
+                          drop_axis.set_axis_off()
+                          continue
+
+                      qdrop_curve = best_fold.get("qdrop_curve", [])
+                      if not qdrop_curve:
+                          phase_axis.set_axis_off()
+                          drop_axis.set_axis_off()
+                          continue
+
+                      qdrop_epochs = [point.get("epoch", 0) for point in qdrop_curve]
+                      prune_ratio = [point.get("prune_ratio", 0.0) for point in qdrop_curve]
+                      prune_steps = [point.get("pruning_step_count", 0) for point in qdrop_curve]
+                      prune_phase = [point.get("is_prune_phase", 0) for point in qdrop_curve]
+                      dropout_enabled = [point.get("dropout_enabled", 0) for point in qdrop_curve]
+                      dropped_wire_count = [point.get("dropped_wire_count", 0) for point in qdrop_curve]
+                      active_dropout_layers = [point.get("active_dropout_layers", 0) for point in qdrop_curve]
+
+                      phase_axis.plot(
+                          qdrop_epochs,
+                          prune_ratio,
+                          color="#2E86AB",
+                          linewidth=2,
+                          label="Prune Ratio",
+                      )
+                      phase_axis.step(
+                          qdrop_epochs,
+                          prune_phase,
+                          where="mid",
+                          color="#C73E1D",
+                          linewidth=2,
+                          label="Prune Phase",
+                      )
+                      phase_axis.plot(
+                          qdrop_epochs,
+                          prune_steps,
+                          color="#3B8B5A",
+                          linewidth=2,
+                          label="Pruning Steps",
+                      )
+                      phase_axis.set_title(
+                          f"{dataset_label} Best Fold #{best_fold['fold']} Pruning Progress",
+                          fontsize=12,
+                          weight="bold",
+                      )
+                      phase_axis.set_xlabel("Epoch")
+                      phase_axis.set_ylabel("Value")
+                      phase_axis.grid(alpha=0.3, linestyle="--")
+                      phase_axis.legend(frameon=False)
+
+                      drop_axis.step(
+                          qdrop_epochs,
+                          dropout_enabled,
+                          where="mid",
+                          color="#F18F01",
+                          linewidth=2,
+                          label="Dropout Enabled",
+                      )
+                      drop_axis.plot(
+                          qdrop_epochs,
+                          dropped_wire_count,
+                          color="#7B2CBF",
+                          linewidth=2,
+                          label="Dropped Wires",
+                      )
+                      drop_axis.plot(
+                          qdrop_epochs,
+                          active_dropout_layers,
+                          color="#00897B",
+                          linewidth=2,
+                          label="Active Dropout Layers",
+                      )
+                      drop_axis.set_title(
+                          f"{dataset_label} Best Fold #{best_fold['fold']} Dropout Progress",
+                          fontsize=12,
+                          weight="bold",
+                      )
+                      drop_axis.set_xlabel("Epoch")
+                      drop_axis.set_ylabel("Count / Flag")
+                      drop_axis.grid(alpha=0.3, linestyle="--")
+                      drop_axis.legend(frameon=False)
+
+                  figure.tight_layout()
+                  figure.savefig(qdrop_chart, dpi=200, bbox_inches="tight")
+                  plt.close(figure)
 
           lines = [
               "# Quantum Graph Training Report — MUTAG & PROTEINS",
@@ -513,7 +620,7 @@ jobs:
               "",
               "## Visualizations",
               "",
-              "The charts below summarize cross-dataset performance and the best-fold learning curves for each dataset.",
+              "The charts below summarize cross-dataset performance, best-fold learning curves, and Q-Drop progress for each dataset.",
           ]
 
           with open("report.md", "w", encoding="utf-8") as report_file:
@@ -532,6 +639,13 @@ jobs:
             echo "### Best-Fold Learning Curves" >> report.md
             echo "" >> report.md
             cml publish "$RESULTS_DIR/report_assets/quantum_graph_learning_curves.png" --md >> report.md
+          fi
+
+          if [ -f "$RESULTS_DIR/report_assets/quantum_graph_qdrop_progress.png" ]; then
+            echo "" >> report.md
+            echo "### Q-Drop Progress" >> report.md
+            echo "" >> report.md
+            cml publish "$RESULTS_DIR/report_assets/quantum_graph_qdrop_progress.png" --md >> report.md
           fi
 
           cml comment create report.md
