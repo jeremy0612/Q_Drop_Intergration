@@ -3,9 +3,9 @@ from torch.nn import Module, ModuleList, Linear, LeakyReLU
 from torch_geometric.nn import global_mean_pool
 
 try:
-    from .GCNConv_Layers import QGCNConv
+    from .gcn_conv_layers import QGCNConv
 except ImportError:
-    from GCNConv_Layers import QGCNConv
+    from gcn_conv_layers import QGCNConv
 
 
 class QGCN(Module):

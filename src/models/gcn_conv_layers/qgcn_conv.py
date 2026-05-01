@@ -4,12 +4,12 @@ from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops, degree
 
 try:
-    from ..QNN_Node_Embedding import quantum_net
+    from ..qnn_node_embedding import quantum_net
 except ImportError:
     import sys
     import os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    from QNN_Node_Embedding import quantum_net
+    from qnn_node_embedding import quantum_net
 
 
 class QGCNConv(MessagePassing):

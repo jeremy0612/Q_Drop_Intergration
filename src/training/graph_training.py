@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 from data.load_mutag import load_mutag
 from data.load_proteins import load_proteins
-from models.quantum_GCN import QGCN
+from models.quantum_gcn import QGCN
 from qdrop import QDropConfig, QDropRuntimeFactory, TorchQDropRuntime
 
 
