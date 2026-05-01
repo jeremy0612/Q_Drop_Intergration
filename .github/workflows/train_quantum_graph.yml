@@ -117,155 +117,438 @@ jobs:
         run: |
           cml ci
 
-          python - << 'PYEOF' > report.md
-          import json, os
+          python - << 'PYEOF'
+          import json
+          import math
+          import os
           from pathlib import Path
 
+          import matplotlib.pyplot as plt
+          import numpy as np
+
           results_dir = Path(os.environ["RESULTS_DIR"])
-          algorithm   = os.environ.get("ALGORITHM", "baseline")
-          ref         = os.environ.get("GITHUB_REF_NAME", "unknown")
-          sha         = os.environ.get("GITHUB_SHA", "")[:8]
-          run_id      = os.environ.get("GITHUB_RUN_ID", "")
-          repo        = os.environ.get("GITHUB_REPOSITORY", "")
+          assets_dir = results_dir / "report_assets"
+          assets_dir.mkdir(parents=True, exist_ok=True)
+          algorithm = os.environ.get("ALGORITHM", "baseline")
+          ref = os.environ.get("GITHUB_REF_NAME", "unknown")
+          sha = os.environ.get("GITHUB_SHA", "")[:8]
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          workflow_name = os.environ.get("GITHUB_WORKFLOW", "unknown")
 
-          with open(results_dir / "summary.json") as f:
-              summary = json.load(f)
+          with open(results_dir / "summary.json", encoding="utf-8") as summary_file:
+              summary = json.load(summary_file)
 
-          METRICS = ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]
-
+          metrics = ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]
+          primary_metrics = ["accuracy", "f1", "roc_auc", "pr_auc"]
+          preferred_dataset_order = ["mutag", "proteins"]
+          ordered_keys = [key for key in preferred_dataset_order if key in summary] + [
+              key for key in summary if key not in preferred_dataset_order
+          ]
           run_url = f"https://github.com/{repo}/actions/runs/{run_id}" if repo and run_id else "#"
+
+          def format_scalar(value):
+              if value is None:
+                  return "—"
+              if isinstance(value, bool):
+                  return "Yes" if value else "No"
+              if isinstance(value, float):
+                  if math.isnan(value) or math.isinf(value):
+                      return "—"
+                  return f"{value:.4f}"
+              return str(value)
+
+          def format_mean_std(mean_value, std_value):
+              if mean_value is None or std_value is None:
+                  return "—"
+              if any(math.isnan(v) or math.isinf(v) for v in (mean_value, std_value)):
+                  return "—"
+              return f"{mean_value:.4f} +/- {std_value:.4f}"
+
+          def select_best_fold(result):
+              folds = result.get("folds", [])
+              if not folds:
+                  return None
+              return max(folds, key=lambda fold: fold.get("accuracy", 0.0))
+
+          overview_chart = assets_dir / "quantum_graph_overview.png"
+          curve_chart = assets_dir / "quantum_graph_learning_curves.png"
+
+          if ordered_keys:
+              metric_labels = ["Accuracy", "F1", "ROC AUC", "PR AUC"]
+              x_positions = np.arange(len(metric_labels))
+              bar_width = 0.35 if len(ordered_keys) > 1 else 0.55
+              colors = ["#2E86AB", "#F18F01", "#C73E1D", "#3B8B5A"]
+
+              figure, axis = plt.subplots(figsize=(12, 6))
+              for index, dataset_key in enumerate(ordered_keys):
+                  result = summary[dataset_key]
+                  stats = result.get("summary", {})
+                  means = [stats.get(f"mean_{metric}", 0.0) for metric in primary_metrics]
+                  stds = [stats.get(f"std_{metric}", 0.0) for metric in primary_metrics]
+                  offset = (index - (len(ordered_keys) - 1) / 2) * bar_width
+                  axis.bar(
+                      x_positions + offset,
+                      means,
+                      width=bar_width,
+                      yerr=stds,
+                      capsize=4,
+                      label=result.get("dataset", dataset_key.upper()),
+                      color=colors[index % len(colors)],
+                      alpha=0.92,
+                  )
+
+              axis.set_title("Cross-Dataset Performance Overview", fontsize=14, weight="bold")
+              axis.set_xticks(x_positions)
+              axis.set_xticklabels(metric_labels)
+              axis.set_ylabel("Score")
+              axis.set_ylim(0.0, 1.05)
+              axis.grid(axis="y", linestyle="--", alpha=0.3)
+              axis.legend(frameon=False)
+              figure.tight_layout()
+              figure.savefig(overview_chart, dpi=200, bbox_inches="tight")
+              plt.close(figure)
+
+              figure, axes = plt.subplots(
+                  len(ordered_keys),
+                  2,
+                  figsize=(14, 5 * max(len(ordered_keys), 1)),
+                  squeeze=False,
+              )
+              for row_index, dataset_key in enumerate(ordered_keys):
+                  result = summary[dataset_key]
+                  dataset_label = result.get("dataset", dataset_key.upper())
+                  best_fold = select_best_fold(result)
+                  loss_axis = axes[row_index][0]
+                  score_axis = axes[row_index][1]
+
+                  if best_fold is None:
+                      loss_axis.set_axis_off()
+                      score_axis.set_axis_off()
+                      continue
+
+                  train_curve = best_fold.get("train_curve", [])
+                  val_curve = best_fold.get("val_curve", [])
+                  train_epochs = [point["epoch"] for point in train_curve]
+                  val_epochs = [point["epoch"] for point in val_curve]
+
+                  if train_curve:
+                      loss_axis.plot(
+                          train_epochs,
+                          [point.get("loss", 0.0) for point in train_curve],
+                          label="Train Loss",
+                          color="#2E86AB",
+                          linewidth=2,
+                      )
+                  if val_curve:
+                      loss_axis.plot(
+                          val_epochs,
+                          [point.get("loss", 0.0) for point in val_curve],
+                          label="Val Loss",
+                          color="#C73E1D",
+                          linewidth=2,
+                      )
+                  loss_axis.set_title(
+                      f"{dataset_label} Best Fold #{best_fold['fold']} Loss",
+                      fontsize=12,
+                      weight="bold",
+                  )
+                  loss_axis.set_xlabel("Epoch")
+                  loss_axis.set_ylabel("Loss")
+                  loss_axis.grid(alpha=0.3, linestyle="--")
+                  loss_axis.legend(frameon=False)
+
+                  if train_curve:
+                      score_axis.plot(
+                          train_epochs,
+                          [point.get("accuracy", 0.0) for point in train_curve],
+                          label="Train Acc",
+                          color="#2E86AB",
+                          linewidth=2,
+                      )
+                  if val_curve:
+                      score_axis.plot(
+                          val_epochs,
+                          [point.get("accuracy", 0.0) for point in val_curve],
+                          label="Val Acc",
+                          color="#F18F01",
+                          linewidth=2,
+                      )
+                      score_axis.plot(
+                          val_epochs,
+                          [point.get("f1", 0.0) for point in val_curve],
+                          label="Val F1",
+                          color="#3B8B5A",
+                          linewidth=2,
+                      )
+                  score_axis.set_title(
+                      f"{dataset_label} Best Fold #{best_fold['fold']} Accuracy / F1",
+                      fontsize=12,
+                      weight="bold",
+                  )
+                  score_axis.set_xlabel("Epoch")
+                  score_axis.set_ylabel("Score")
+                  score_axis.set_ylim(0.0, 1.05)
+                  score_axis.grid(alpha=0.3, linestyle="--")
+                  score_axis.legend(frameon=False)
+
+              figure.tight_layout()
+              figure.savefig(curve_chart, dpi=200, bbox_inches="tight")
+              plt.close(figure)
+
           lines = [
               "# Quantum Graph Training Report — MUTAG & PROTEINS",
               "",
               f"**Branch:** `{ref}` | **Commit:** `{sha}` | **Run:** [{run_id}]({run_url})",
               f"**Algorithm:** `{algorithm}` | **Model:** QGCN",
               "",
+              "## Run Overview",
+              "",
+              "| Property | Value |",
+              "|----------|-------|",
+              f"| Workflow | `{workflow_name}` |",
+              f"| Branch | `{ref}` |",
+              f"| Commit | `{sha}` |",
+              f"| Run | [{run_id}]({run_url}) |",
+              f"| Algorithm | `{algorithm}` |",
+              f"| Model | `QGCN` |",
+              f"| Datasets | {', '.join(summary[key].get('dataset', key.upper()) for key in ordered_keys)} |",
+              "",
+              "## Dataset Overview",
+              "",
+              "| Dataset | Source | Graphs | Classes | Node Feature Dim | Task |",
+              "|---------|--------|-------:|--------:|-----------------:|------|",
           ]
 
-          for dataset_key, result in summary.items():
+          for dataset_key in ordered_keys:
+              result = summary[dataset_key]
+              source = result.get("dataset_source", "—")
+              source_url = f"https://huggingface.co/datasets/{source}" if source != "—" else "#"
+              lines.append(
+                  f"| {result.get('dataset', dataset_key.upper())} | [{source}]({source_url}) | "
+                  f"{result.get('n_graphs', '—')} | {result.get('n_classes', '—')} | "
+                  f"{result.get('node_feature_dim', '—')} | {result.get('task', '—')} |"
+              )
+
+          reference_config = summary[ordered_keys[0]].get("config", {}) if ordered_keys else {}
+          config_rows = [
+              ("Epochs", reference_config.get("epochs")),
+              ("Learning rate", reference_config.get("lr")),
+              ("Weight decay", reference_config.get("weight_decay")),
+              ("Batch size", reference_config.get("batch_size")),
+              ("Q-depths", reference_config.get("q_depths")),
+              ("Folds", reference_config.get("n_folds")),
+              ("Early stop patience", reference_config.get("early_stop_patience")),
+              ("Validation frequency", reference_config.get("val_frequency")),
+              ("Gradient clip", reference_config.get("grad_clip")),
+              ("LR scheduler", reference_config.get("use_scheduler")),
+              ("Class weights", reference_config.get("use_class_weights")),
+              ("Q-Drop schedule", reference_config.get("qdrop_schedule")),
+              ("Dropout probability", reference_config.get("dropout_prob")),
+              ("Dropped wires / layer", reference_config.get("n_drop_wires")),
+              ("Forward output masking", reference_config.get("enable_forward_mask")),
+              ("Seed", reference_config.get("seed")),
+          ]
+          if algorithm in {"pruning", "both"}:
+              config_rows.extend(
+                  [
+                      ("Accumulate window", reference_config.get("accumulate_window")),
+                      ("Prune window", reference_config.get("prune_window")),
+                      ("Prune ratio", reference_config.get("prune_ratio")),
+                  ]
+              )
+
+          lines += [
+              "",
+              "## Shared Training Configuration",
+              "",
+              "| Parameter | Value |",
+              "|-----------|-------|",
+          ]
+          for label, value in config_rows:
+              lines.append(f"| {label} | {format_scalar(value)} |")
+
+          lines += [
+              "",
+              "## Aggregate Results",
+              "",
+              "| Dataset | Accuracy | F1 | ROC AUC | PR AUC | Precision | Recall |",
+              "|---------|----------|----|---------|--------|-----------|--------|",
+          ]
+          for dataset_key in ordered_keys:
+              result = summary[dataset_key]
+              stats = result.get("summary", {})
+              lines.append(
+                  f"| {result.get('dataset', dataset_key.upper())} | "
+                  f"{format_mean_std(stats.get('mean_accuracy'), stats.get('std_accuracy'))} | "
+                  f"{format_mean_std(stats.get('mean_f1'), stats.get('std_f1'))} | "
+                  f"{format_mean_std(stats.get('mean_roc_auc'), stats.get('std_roc_auc'))} | "
+                  f"{format_mean_std(stats.get('mean_pr_auc'), stats.get('std_pr_auc'))} | "
+                  f"{format_mean_std(stats.get('mean_precision'), stats.get('std_precision'))} | "
+                  f"{format_mean_std(stats.get('mean_recall'), stats.get('std_recall'))} |"
+              )
+
+          for dataset_key in ordered_keys:
+              result = summary[dataset_key]
               dataset = result.get("dataset", dataset_key.upper())
-              cfg     = result.get("config", {})
-              agg     = result.get("summary", {})
-              folds   = result.get("folds", [])
+              cfg = result.get("config", {})
+              stats = result.get("summary", {})
+              folds = result.get("folds", [])
+              best_fold = select_best_fold(result)
 
               lines += [
+                  "",
                   f"## {dataset}",
                   "",
                   "### Configuration",
                   "",
                   "| Parameter | Value |",
                   "|-----------|-------|",
-                  f"| Epochs | {cfg.get('epochs')} |",
-                  f"| Learning rate | {cfg.get('lr')} |",
-                  f"| Weight decay | {cfg.get('weight_decay')} |",
-                  f"| Batch size | {cfg.get('batch_size')} |",
-                  f"| Q-depths | {cfg.get('q_depths')} |",
-                  f"| Folds | {cfg.get('n_folds')} |",
-                  f"| Early stop patience | {cfg.get('early_stop_patience')} |",
-                  f"| Grad clip | {cfg.get('grad_clip')} |",
-                  f"| LR scheduler | {cfg.get('use_scheduler')} |",
-                  f"| Class weights | {cfg.get('use_class_weights')} |",
-                  f"| Seed | {cfg.get('seed')} |",
+                  f"| Epochs | {format_scalar(cfg.get('epochs'))} |",
+                  f"| Learning rate | {format_scalar(cfg.get('lr'))} |",
+                  f"| Weight decay | {format_scalar(cfg.get('weight_decay'))} |",
+                  f"| Batch size | {format_scalar(cfg.get('batch_size'))} |",
+                  f"| Q-depths | {format_scalar(cfg.get('q_depths'))} |",
+                  f"| Folds | {format_scalar(cfg.get('n_folds'))} |",
+                  f"| Early stop patience | {format_scalar(cfg.get('early_stop_patience'))} |",
+                  f"| Validation frequency | {format_scalar(cfg.get('val_frequency'))} |",
+                  f"| Gradient clip | {format_scalar(cfg.get('grad_clip'))} |",
+                  f"| LR scheduler | {format_scalar(cfg.get('use_scheduler'))} |",
+                  f"| Class weights | {format_scalar(cfg.get('use_class_weights'))} |",
+                  f"| Seed | {format_scalar(cfg.get('seed'))} |",
                   "",
-                  "### Aggregate Results (mean ± std, 10-fold CV)",
+                  "### Aggregate Results",
                   "",
                   "| Metric | Mean | Std |",
-                  "|--------|-----:|----:|",
+                  "|--------|------|-----|",
               ]
-              for m in METRICS:
-                  mean = agg.get(f"mean_{m}", float("nan"))
-                  std  = agg.get(f"std_{m}", float("nan"))
-                  lines.append(f"| {m.upper()} | {mean:.4f} | ±{std:.4f} |")
+              for metric in metrics:
+                  lines.append(
+                      f"| {metric.upper()} | "
+                      f"{format_scalar(stats.get(f'mean_{metric}'))} | "
+                      f"{format_scalar(stats.get(f'std_{metric}'))} |"
+                  )
+
+              if best_fold is not None:
+                  lines += [
+                      "",
+                      "### Best Fold Snapshot",
+                      "",
+                      "| Fold | Test Loss | Accuracy | F1 | Precision | Recall | ROC AUC | PR AUC |",
+                      "|------|-----------|----------|----|-----------|--------|---------|--------|",
+                      f"| {best_fold.get('fold', '—')} | {format_scalar(best_fold.get('test_loss'))} | "
+                      f"{format_scalar(best_fold.get('accuracy'))} | {format_scalar(best_fold.get('f1'))} | "
+                      f"{format_scalar(best_fold.get('precision'))} | {format_scalar(best_fold.get('recall'))} | "
+                      f"{format_scalar(best_fold.get('roc_auc'))} | {format_scalar(best_fold.get('pr_auc'))} |",
+                  ]
 
               lines += [
                   "",
                   "### Per-Fold Results",
                   "",
-                  "| Fold | Test Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
-                  "|:----:|----------:|" + "|------:" * len(METRICS) + "|",
+                  "| Fold | Test Loss | " + " | ".join(metric.upper() for metric in metrics) + " |",
+                  "|------|-----------|" + "|----------|" * len(metrics) + "|",
               ]
               for fold in folds:
-                  vals = " | ".join(f"{fold.get(m, 0.0):.4f}" for m in METRICS)
-                  lines.append(f"| {fold['fold']} | {fold.get('test_loss', 0.0):.4f} | {vals} |")
+                  fold_values = " | ".join(format_scalar(fold.get(metric)) for metric in metrics)
+                  lines.append(
+                      f"| {fold['fold']} | {format_scalar(fold.get('test_loss'))} | {fold_values} |"
+                  )
 
-              # Best fold epoch-level curves in collapsible blocks
-              best_fold = max(folds, key=lambda r: r.get("accuracy", 0.0), default=None)
-              if best_fold:
-                  fold_num = best_fold["fold"]
-                  fold_acc = best_fold.get("accuracy", 0.0)
+              if best_fold is not None and best_fold.get("val_curve"):
+                  lines += [
+                      "",
+                      "<details><summary>Best fold validation metrics by epoch</summary>",
+                      "",
+                      "| Epoch | Val Loss | " + " | ".join(metric.upper() for metric in metrics) + " |",
+                      "|------:|---------:|" + "|----------:" * len(metrics) + "|",
+                  ]
+                  for epoch_metrics in best_fold["val_curve"]:
+                      values = " | ".join(
+                          format_scalar(epoch_metrics.get(metric)) for metric in metrics
+                      )
+                      lines.append(
+                          f"| {epoch_metrics['epoch']} | {format_scalar(epoch_metrics.get('loss'))} | {values} |"
+                      )
+                  lines += ["", "</details>"]
 
-                  if best_fold.get("val_curve"):
-                      vcurve = best_fold["val_curve"]
-                      stag = "<summary>Fold " + str(fold_num) + " (best, acc=" + f"{fold_acc:.4f}" + ") - val metrics per epoch</summary>"
-                      lines += [
-                          "",
-                          "<details>" + stag,
-                          "",
-                          "| Epoch | Val Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
-                          "|------:|---------:|" + "|------:" * len(METRICS) + "|",
-                      ]
-                      for ep in vcurve:
-                          ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
-                          lines.append("| " + str(ep["epoch"]) + " | " + f"{ep.get('loss', 0.0):.4f}" + " | " + ep_vals + " |")
-                      lines += ["", "</details>"]
+              if best_fold is not None and best_fold.get("train_curve"):
+                  lines += [
+                      "",
+                      "<details><summary>Best fold training metrics by epoch</summary>",
+                      "",
+                      "| Epoch | Train Loss | " + " | ".join(metric.upper() for metric in metrics) + " |",
+                      "|------:|-----------:|" + "|----------:" * len(metrics) + "|",
+                  ]
+                  for epoch_metrics in best_fold["train_curve"]:
+                      values = " | ".join(
+                          format_scalar(epoch_metrics.get(metric)) for metric in metrics
+                      )
+                      lines.append(
+                          f"| {epoch_metrics['epoch']} | {format_scalar(epoch_metrics.get('loss'))} | {values} |"
+                      )
+                  lines += ["", "</details>"]
 
-                  if best_fold.get("train_curve"):
-                      tcurve = best_fold["train_curve"]
-                      stag = "<summary>Fold " + str(fold_num) + " (best) - train metrics per epoch</summary>"
-                      lines += [
-                          "",
-                          "<details>" + stag,
-                          "",
-                          "| Epoch | Train Loss | " + " | ".join(m.upper() for m in METRICS) + " |",
-                          "|------:|-----------:|" + "|------:" * len(METRICS) + "|",
-                      ]
-                      for ep in tcurve:
-                          ep_vals = " | ".join(f"{ep.get(m, 0.0):.4f}" for m in METRICS)
-                          lines.append("| " + str(ep["epoch"]) + " | " + f"{ep.get('loss', 0.0):.4f}" + " | " + ep_vals + " |")
-                      lines += ["", "</details>"]
-
-              lines.append("")
-
-          # Baseline comparison
           baseline_path = Path("quantum_graph_baseline.json")
           if baseline_path.exists():
-              with open(baseline_path) as f:
-                  baseline = json.load(f)
+              with open(baseline_path, encoding="utf-8") as baseline_file:
+                  baseline = json.load(baseline_file)
               lines += [
+                  "",
                   "## Baseline Comparison",
                   "",
                   "| Dataset | Metric | Baseline | Current | Delta | Status |",
-                  "|---------|--------|:--------:|:-------:|------:|--------|",
+                  "|---------|--------|----------|---------|-------|--------|",
               ]
-              for dataset_key in summary:
-                  curr_agg = summary[dataset_key].get("summary", {})
-                  base_agg = baseline.get(dataset_key, {}).get("summary", {})
-                  dataset  = summary[dataset_key].get("dataset", dataset_key.upper())
-                  for m in ["accuracy", "f1", "roc_auc", "pr_auc"]:
-                      curr  = curr_agg.get(f"mean_{m}", float("nan"))
-                      base  = base_agg.get(f"mean_{m}", float("nan"))
-                      delta = curr - base
-                      sign  = "+" if delta >= 0 else ""
+              for dataset_key in ordered_keys:
+                  current_stats = summary[dataset_key].get("summary", {})
+                  baseline_stats = baseline.get(dataset_key, {}).get("summary", {})
+                  dataset = summary[dataset_key].get("dataset", dataset_key.upper())
+                  for metric in ["accuracy", "f1", "roc_auc", "pr_auc"]:
+                      current_value = current_stats.get(f"mean_{metric}", float("nan"))
+                      baseline_value = baseline_stats.get(f"mean_{metric}", float("nan"))
+                      delta = current_value - baseline_value
+                      sign = "+" if delta >= 0 else ""
                       if delta > 0.005:
-                          status = "✅ Improved"
+                          status = "Improved"
                       elif delta < -0.01:
-                          status = "❌ Regression"
+                          status = "Regression"
                       else:
-                          status = "➡ Stable"
+                          status = "Stable"
                       lines.append(
-                          f"| {dataset} | {m.upper()} | {base:.4f} | {curr:.4f}"
-                          f" | {sign}{delta:.4f} | {status} |"
+                          f"| {dataset} | {metric.upper()} | {baseline_value:.4f} | "
+                          f"{current_value:.4f} | {sign}{delta:.4f} | {status} |"
                       )
-              lines.append("")
           else:
               lines += [
                   "",
-                  "> No baseline found — this run will become the baseline on merge to `main`.",
-                  "",
+                  "> No baseline found; this run will become the baseline after merge to `main`.",
               ]
 
-          print("\n".join(lines))
+          lines += [
+              "",
+              "## Visualizations",
+              "",
+              "The charts below summarize cross-dataset performance and the best-fold learning curves for each dataset.",
+          ]
+
+          with open("report.md", "w", encoding="utf-8") as report_file:
+              report_file.write("\n".join(lines) + "\n")
           PYEOF
+
+          if [ -f "$RESULTS_DIR/report_assets/quantum_graph_overview.png" ]; then
+            echo "" >> report.md
+            echo "### Performance Overview" >> report.md
+            echo "" >> report.md
+            cml publish "$RESULTS_DIR/report_assets/quantum_graph_overview.png" --md >> report.md
+          fi
+
+          if [ -f "$RESULTS_DIR/report_assets/quantum_graph_learning_curves.png" ]; then
+            echo "" >> report.md
+            echo "### Best-Fold Learning Curves" >> report.md
+            echo "" >> report.md
+            cml publish "$RESULTS_DIR/report_assets/quantum_graph_learning_curves.png" --md >> report.md
+          fi
 
           cml comment create report.md
 
@@ -278,6 +561,8 @@ jobs:
             ${{ env.RESULTS_DIR }}/summary.json
             ${{ env.RESULTS_DIR }}/mutag/metrics.json
             ${{ env.RESULTS_DIR }}/proteins/metrics.json
+            ${{ env.RESULTS_DIR }}/report_assets/*.png
+            report.md
           retention-days: 30
 
       - name: Commit baseline on main push
