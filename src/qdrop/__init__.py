@@ -1,13 +1,13 @@
-"""Backward-compatible exports for the Torch Q-Drop runtime."""
+"""Reusable Torch-side Q-Drop contract and runtime."""
 
-from qdrop.contract import (
+from .contract import (
     DiscoveredQuantumLayer,
     QuantumDropCompatible,
     QuantumDropoutState,
     QuantumParameterMetadata,
     discover_quantum_layers,
 )
-from qdrop.runtime import TorchQDropConfig, TorchQDropManager
+from .runtime import TorchQDropConfig, TorchQDropManager
 
 __all__ = [
     "DiscoveredQuantumLayer",
