@@ -13,8 +13,8 @@ import pennylane as qml
 import tensorflow as tf
 from pennylane.templates import AngleEmbedding, BasicEntanglerLayers
 
-from utils.dropout import QuantumDynamicDropoutManager
-from utils.pruning import ScheduledGradientPruning
+from qdrop import QDropConfig, QDropRuntimeFactory
+from qdrop.specs.pennylane_tf import PennyLaneTensorFlowSpecFactory
 
 warnings.filterwarnings("ignore")
 tf.get_logger().setLevel("ERROR")
@@ -26,10 +26,6 @@ DEFAULT_ALGORITHM_PARAMS = {
     "schedule": True,
 }
 SUPPORTED_ALGORITHMS = {"baseline", "pruning", "dropout", "both"}
-LEGACY_WIRE_0_MASK_PATTERN = (1, 0, 1, 0)
-LEGACY_WIRE_1_MASK_PATTERN = (0, 1, 0, 0)
-
-
 def _set_random_seed(random_seed: int) -> None:
     """Seed every RNG used by the integrated model."""
     random.seed(random_seed)
@@ -46,18 +42,6 @@ def _resolve_algorithm_params(
     if algorithm_params is not None:
         resolved_params.update(algorithm_params)
     return resolved_params
-
-
-def _build_dropout_mask(pattern: Sequence[int], total_params: int) -> tf.Tensor:
-    """
-    Expand a legacy flat mask pattern to the current quantum weight size.
-
-    The project currently relies on a small hand-authored mask pattern. We pad
-    the pattern instead of changing its semantics during a naming-only refactor.
-    """
-    clipped_pattern = list(pattern[:total_params])
-    padded_pattern = clipped_pattern + [0] * max(total_params - len(clipped_pattern), 0)
-    return tf.constant(padded_pattern, dtype=tf.int32)
 
 
 class IntegratedQDropHQGCModel(tf.keras.Model):
@@ -109,11 +93,22 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
         )
         self.quantum_device = qml.device("default.qubit", wires=n_qubits)
         self.quantum_circuit = self._build_quantum_circuit()
+        self.qdrop_forward_mask = tf.Variable(
+            tf.ones((n_qubits,), dtype=tf.float32),
+            trainable=False,
+            name="qdrop_forward_mask",
+        )
         self.postprocess_dense = tf.keras.layers.Dense(32, activation="relu", dtype=tf.float32)
         self.output_dense = tf.keras.layers.Dense(2, activation="softmax", dtype=tf.float32)
-
-        self.pruning_algorithm = self._build_pruning_algorithm()
-        self.dropout_algorithm = self._build_dropout_algorithm()
+        self.qdrop_quantum_layer = PennyLaneTensorFlowSpecFactory.create_adapter(
+            layer_id="integrated_quantum_layer",
+            parameter=self.quantum_weights,
+            num_wires=self.n_qubits,
+            mask_builder=self._build_qdrop_mask,
+            set_forward_mask=self._set_qdrop_forward_mask,
+            supports_forward_mask=True,
+        )
+        self.qdrop_runtime = self._build_qdrop_runtime()
 
         # Backward-compatible aliases for existing scripts and docs.
         self.flatten = self.flatten_layer
@@ -121,6 +116,8 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
         self.dense_postprocess = self.postprocess_dense
         self.output_layer = self.output_dense
         self.dev = self.quantum_device
+        self.pruning_algorithm = self.qdrop_runtime if self.algorithm in {"pruning", "both"} else None
+        self.dropout_algorithm = self.qdrop_runtime if self.algorithm in {"dropout", "both"} else None
         self.pruning_algo = self.pruning_algorithm
         self.dropout_algo = self.dropout_algorithm
 
@@ -135,41 +132,47 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
 
         return quantum_circuit
 
-    def _build_pruning_algorithm(self) -> Optional[ScheduledGradientPruning]:
-        """Initialize scheduled gradient pruning when enabled."""
-        if self.algorithm not in {"pruning", "both"}:
+    def _build_qdrop_runtime(self):
+        if self.algorithm == "baseline":
             return None
 
-        return ScheduledGradientPruning(
-            self.quantum_weights,
-            accumulate_window=self.algorithm_params.get("accumulate_window", 10),
-            prune_window=self.algorithm_params.get("prune_window", 8),
-            prune_ratio=self.algorithm_params.get("prune_ratio", 0.8),
-            seed=self.random_seed,
-            dtype=tf.float32,
-            schedule=self.algorithm_params.get("schedule", True),
+        return QDropRuntimeFactory.create_tensorflow(
+            quantum_layers=self.qdrop_layers(),
+            config=QDropConfig(
+                algorithm=self.algorithm,
+                accumulate_window=self.algorithm_params.get("accumulate_window", 10),
+                prune_window=self.algorithm_params.get("prune_window", 8),
+                prune_ratio=self.algorithm_params.get("prune_ratio", 0.8),
+                schedule=self.algorithm_params.get("schedule", True),
+                dropout_prob=1.0 if self.apply_dropout_flag else 0.5,
+                n_drop_wires=1,
+                enable_forward_mask=True,
+            ),
         )
 
-    def _build_dropout_algorithm(self) -> Optional[QuantumDynamicDropoutManager]:
-        """Initialize wire-level quantum dropout when enabled."""
-        if self.algorithm not in {"dropout", "both"}:
-            return None
+    def _build_qdrop_mask(self, wire_ids: Sequence[int]) -> tf.Tensor:
+        mask = np.zeros((self.n_layers, self.n_qubits), dtype=bool)
+        for wire_index in wire_ids:
+            if 0 <= wire_index < self.n_qubits:
+                mask[:, wire_index] = True
+        return tf.constant(mask, dtype=tf.bool)
 
-        total_quantum_params = self.n_qubits * self.n_layers
-        wire_0_mask = _build_dropout_mask(LEGACY_WIRE_0_MASK_PATTERN, total_quantum_params)
-        wire_1_mask = _build_dropout_mask(LEGACY_WIRE_1_MASK_PATTERN, total_quantum_params)
+    def _set_qdrop_forward_mask(self, dropout_state) -> None:
+        mask = np.ones((self.n_qubits,), dtype=np.float32)
+        if dropout_state is not None and dropout_state.enabled:
+            for wire_index in dropout_state.dropped_wires:
+                if 0 <= wire_index < self.n_qubits:
+                    mask[wire_index] = 0.0
+        self.qdrop_forward_mask.assign(mask)
 
-        # The current implementation keeps the original one-wire drop behavior.
-        self.dropout_enabled = tf.Variable(self.apply_dropout_flag, trainable=False)
-        self.drop_flag = self.dropout_enabled
+    def qdrop_layers(self):
+        return [self.qdrop_quantum_layer]
 
-        return QuantumDynamicDropoutManager(
-            self.quantum_weights,
-            wire_0_mask,
-            wire_1_mask,
-            tf.constant(1, dtype=tf.int32),
-            self.dropout_enabled,
-        )
+    def _build_pruning_algorithm(self) -> Optional[object]:
+        return self.pruning_algorithm
+
+    def _build_dropout_algorithm(self) -> Optional[object]:
+        return self.dropout_algorithm
 
     @staticmethod
     def _replace_nan_values(tensor: tf.Tensor) -> tf.Tensor:
@@ -193,20 +196,10 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
                 self.quantum_circuit(self._to_numpy(sample_inputs), quantum_weights_np),
                 dtype=np.float32,
             )
+            circuit_output = circuit_output * self._to_numpy(self.qdrop_forward_mask)
             batch_quantum_outputs.append(tf.constant(circuit_output, dtype=tf.float32))
 
         return tf.stack(batch_quantum_outputs)
-
-    def _get_quantum_weight_index(self) -> int:
-        """Locate the trainable variable index for the quantum weight tensor."""
-        for variable_index, variable in enumerate(self.trainable_variables):
-            if variable is self.quantum_weights or "quantum_weights" in variable.name:
-                return variable_index
-
-        raise ValueError(
-            "Quantum weights variable not found in trainable_variables: "
-            f"{[variable.name for variable in self.trainable_variables]}"
-        )
 
     def _sanitize_gradients(self, gradients: List[Optional[tf.Tensor]]) -> List[tf.Tensor]:
         """Replace missing or NaN gradients with zeros."""
@@ -217,36 +210,6 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
             else:
                 sanitized_gradients.append(self._replace_nan_values(gradient))
         return sanitized_gradients
-
-    def _apply_dropout_if_enabled(self, gradients: List[tf.Tensor]) -> List[tf.Tensor]:
-        """Apply quantum dropout to gradients when the configured mode requires it."""
-        if self.algorithm not in {"dropout", "both"} or self.dropout_algorithm is None:
-            return gradients
-        return self.dropout_algorithm.apply_dropout(gradients, self.trainable_variables)
-
-    def _apply_optimizer_step(
-        self,
-        gradients: List[tf.Tensor],
-        can_use_pruning: bool,
-    ) -> None:
-        """
-        Apply a single optimizer step using either pruning-aware or standard logic.
-
-        The previous implementation could update weights twice per batch when
-        dropout was enabled. This keeps the gradient path explicit and unified.
-        """
-        if self.algorithm in {"pruning", "both"} and self.pruning_algorithm is not None and can_use_pruning:
-            quantum_weight_index = self._get_quantum_weight_index()
-            quantum_gradient = gradients[quantum_weight_index]
-            self.pruning_algorithm.apply(
-                quantum_gradient,
-                self.optimizer,
-                gradients,
-                self.trainable_variables,
-            )
-            return
-
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
     def _sanitize_trainable_variables(self) -> None:
         """Remove NaNs from model weights after each optimization step."""
@@ -267,6 +230,9 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
     def train_step(self, data):
         inputs, labels = data
 
+        if self.qdrop_runtime is not None and self.optimizer is not None:
+            self.qdrop_runtime.start_epoch(int(self.optimizer.iterations.numpy()) + 1)
+
         with tf.GradientTape() as tape:
             predictions = self(inputs, training=True)
             loss = self.compiled_loss(
@@ -276,15 +242,17 @@ class IntegratedQDropHQGCModel(tf.keras.Model):
             )
 
         raw_gradients = tape.gradient(loss, self.trainable_variables)
-        quantum_weight_index = self._get_quantum_weight_index()
-        raw_quantum_gradient = raw_gradients[quantum_weight_index]
+        processed_gradients = raw_gradients
+        if self.qdrop_runtime is not None:
+            processed_gradients = self.qdrop_runtime.process_gradients(
+                raw_gradients,
+                self.trainable_variables,
+            )
 
-        sanitized_gradients = self._sanitize_gradients(raw_gradients)
-        masked_gradients = self._apply_dropout_if_enabled(sanitized_gradients)
-        self._apply_optimizer_step(
-            masked_gradients,
-            can_use_pruning=raw_quantum_gradient is not None,
-        )
+        sanitized_gradients = self._sanitize_gradients(processed_gradients)
+        self.optimizer.apply_gradients(zip(sanitized_gradients, self.trainable_variables))
+        if self.qdrop_runtime is not None:
+            self.qdrop_runtime.after_step()
         self._sanitize_trainable_variables()
 
         self.compiled_metrics.update_state(labels, predictions)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,8 +31,8 @@ from tqdm import tqdm
 
 from data.load_mutag import load_mutag
 from data.load_proteins import load_proteins
-from models.Quantum_GCN import QGCN
-from qdrop.runtime import TorchQDropConfig, TorchQDropManager
+from models.quantum_GCN import QGCN
+from qdrop import QDropConfig, QDropRuntimeFactory, TorchQDropRuntime
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ class EarlyStopping:
 
 
 def set_seed(seed: int) -> None:
+    random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -176,10 +178,10 @@ def build_optimizer(model: nn.Module, config: GraphTrainConfig) -> optim.Optimiz
     return optim.Adam(model.parameters(), lr=config.lr)
 
 
-def build_qdrop_manager(model: nn.Module, config: GraphTrainConfig) -> TorchQDropManager:
-    return TorchQDropManager(
-        model=model,
-        config=TorchQDropConfig(
+def build_qdrop_manager(model: nn.Module, config: GraphTrainConfig):
+    return QDropRuntimeFactory.create_torch(
+        quantum_layers=model.qdrop_layers(),
+        config=QDropConfig(
             algorithm=config.algorithm,
             accumulate_window=config.accumulate_window,
             prune_window=config.prune_window,
@@ -201,7 +203,7 @@ def run_epoch(
     optimizer: Optional[optim.Optimizer] = None,
     scheduler: Optional[OneCycleLR] = None,
     grad_clip: float = 1.0,
-    qdrop_manager: Optional[TorchQDropManager] = None,
+    qdrop_manager: Optional[TorchQDropRuntime] = None,
 ) -> Tuple[float, Dict[str, float]]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -210,7 +212,7 @@ def run_epoch(
         if is_train:
             qdrop_manager.start_epoch(epoch_index or 0)
         else:
-            qdrop_manager.clear_dropout()
+            qdrop_manager.clear_forward_masks()
 
     total_loss = 0.0
     all_labels: List[int] = []
@@ -233,12 +235,12 @@ def run_epoch(
             if is_train:
                 loss.backward()
                 if qdrop_manager is not None:
-                    qdrop_manager.apply()
+                    qdrop_manager.after_backward()
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
                 if qdrop_manager is not None:
-                    qdrop_manager.sanitize_parameters()
+                    qdrop_manager.after_step()
                 if scheduler is not None:
                     scheduler.step()
 

@@ -1,20 +1,22 @@
-"""Reusable Torch-side Q-Drop contract and runtime."""
+"""Simple factory-based Q-Drop API shared across project paths."""
 
-from .contract import (
-    DiscoveredQuantumLayer,
-    QuantumDropCompatible,
-    QuantumDropoutState,
-    QuantumParameterMetadata,
-    discover_quantum_layers,
-)
-from .runtime import TorchQDropConfig, TorchQDropManager
+from .backends.tensorflow_runtime import TensorFlowQDropRuntime
+from .backends.torch_runtime import TorchQDropRuntime
+from .core import QDropUnit
+from .factories import QDropRuntimeFactory, QDropSpecFactory
+from .session import QDropSession
+from .types import QDropConfig, QDropDropoutState, QDropLayerSpec, QDropTensorSpec, SupportsQDropSpec
 
 __all__ = [
-    "DiscoveredQuantumLayer",
-    "QuantumDropCompatible",
-    "QuantumDropoutState",
-    "QuantumParameterMetadata",
-    "TorchQDropConfig",
-    "TorchQDropManager",
-    "discover_quantum_layers",
+    "QDropConfig",
+    "QDropDropoutState",
+    "QDropLayerSpec",
+    "QDropRuntimeFactory",
+    "QDropSession",
+    "QDropSpecFactory",
+    "QDropTensorSpec",
+    "TensorFlowQDropRuntime",
+    "TorchQDropRuntime",
+    "QDropUnit",
+    "SupportsQDropSpec",
 ]

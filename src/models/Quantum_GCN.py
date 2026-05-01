@@ -51,6 +51,16 @@ class QGCN(Module):
 
         self.classifier = Linear(self.n_qubits, output_dims)
 
+    def qdrop_layers(self):
+        quantum_layers = []
+        for layer_index, layer in enumerate(self.layers):
+            quantum_layer = getattr(layer, "quantum_layer", None)
+            if quantum_layer is None:
+                continue
+            quantum_layer.qdrop_name = f"layers.{layer_index}.quantum_layer"
+            quantum_layers.append(quantum_layer)
+        return quantum_layers
+
     def forward(self, x, edge_index, batch):
         """
         Defining how tensors are supposed to move through the *dressed* quantum

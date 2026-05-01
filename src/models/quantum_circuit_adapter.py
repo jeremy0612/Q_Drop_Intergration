@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
-
 import pennylane as qml
 import torch
 import torch.nn as nn
 
-from qdrop.contract import QuantumDropCompatible, QuantumDropoutState, QuantumParameterMetadata
+from qdrop.specs.pennylane_torch import PennyLaneTorchSpecFactory
+from qdrop.types import QDropDropoutState
 
 
-class QuantumCircuitAdapter(nn.Module, QuantumDropCompatible):
-    """Own a PennyLane TorchLayer and expose Q-Drop metadata for it."""
+class QuantumCircuitAdapter(nn.Module):
+    """Own a PennyLane TorchLayer and expose lazy Q-Drop specs for it."""
 
     def __init__(self, n_qubits: int, n_layers: int):
         super().__init__()
         self.n_qubits = n_qubits
         self.n_layers = n_layers
+        self.qdrop_name = self.__class__.__name__
 
         device = qml.device("default.qubit", wires=n_qubits)
 
@@ -31,32 +31,19 @@ class QuantumCircuitAdapter(nn.Module, QuantumDropCompatible):
         self.quantum_layer = qml.qnn.TorchLayer(qnode, weight_shapes)
         self.register_buffer("forward_output_mask", torch.ones(n_qubits, dtype=torch.float32))
 
-        self._wire_masks = self._build_wire_masks()
-
     @property
     def weights(self) -> nn.Parameter:
         """Expose the trainable quantum weights for compatibility and testing."""
         return self.quantum_layer.weights
 
-    def _build_wire_masks(self) -> Dict[int, torch.Tensor]:
-        wire_masks: Dict[int, torch.Tensor] = {}
-        for wire_index in range(self.n_qubits):
-            mask = torch.zeros(self.n_layers, self.n_qubits, dtype=torch.bool)
-            mask[:, wire_index] = True
-            wire_masks[wire_index] = mask
-        return wire_masks
+    def mask_builder(self, wire_ids):
+        mask = torch.zeros(self.n_layers, self.n_qubits, dtype=torch.bool, device=self.weights.device)
+        for wire_index in wire_ids:
+            if 0 <= wire_index < self.n_qubits:
+                mask[:, wire_index] = True
+        return mask
 
-    def get_qdrop_parameters(self):
-        return [
-            QuantumParameterMetadata(
-                parameter_name="weights",
-                parameter=self.quantum_layer.weights,
-                num_wires=self.n_qubits,
-                wire_masks=self._wire_masks,
-            )
-        ]
-
-    def set_qdrop_dropout_state(self, dropout_state: Optional[QuantumDropoutState]) -> None:
+    def set_forward_mask(self, dropout_state: QDropDropoutState | None) -> None:
         self.forward_output_mask.fill_(1.0)
         if dropout_state is None or not dropout_state.enabled:
             return
@@ -64,6 +51,9 @@ class QuantumCircuitAdapter(nn.Module, QuantumDropCompatible):
         for wire_index in dropout_state.dropped_wires:
             if 0 <= wire_index < self.n_qubits:
                 self.forward_output_mask[wire_index] = 0.0
+
+    def qdrop_layer_spec(self):
+        return PennyLaneTorchSpecFactory.from_adapter(self)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         quantum_outputs = self.quantum_layer(inputs)
