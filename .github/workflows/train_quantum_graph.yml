@@ -52,9 +52,9 @@ jobs:
         with:
           python-version: "3.10"
 
-    #   - name: Install CML
-    #     run: |
-    #       npm install -g @dvcorg/cml
+      - name: Install CML
+        run: |
+          npm install -g @dvcorg/cml
 
       - name: Install PyTorch (CUDA 12.1)
         run: |
@@ -63,6 +63,13 @@ jobs:
 
       - name: Install PyTorch Geometric
         run: |
+          pip install \
+            pyg_lib \
+            torch_scatter \
+            torch_sparse \
+            torch_cluster \
+            torch_spline_conv \
+            -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
           pip install torch-geometric
 
       - name: Install training dependencies

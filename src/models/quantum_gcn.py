@@ -1,5 +1,5 @@
 import torch
-from torch.nn import Module, ModuleList, Linear, LeakyReLU
+from torch.nn import Linear, LeakyReLU, Module, ModuleList
 from torch_geometric.nn import global_mean_pool
 
 try:
@@ -21,7 +21,6 @@ class QGCN(Module):
         readout=False,
         n_qubits=None,
     ):
-
         super().__init__()
         layers = []
         max_qubits = 16
@@ -36,8 +35,8 @@ class QGCN(Module):
             n_qubits = 8
         self.n_qubits = n_qubits
 
-        for i, q_depth in enumerate(q_depths):
-            layer_input_dims = input_dims if i == 0 else n_qubits
+        for index, q_depth in enumerate(q_depths):
+            layer_input_dims = input_dims if index == 0 else n_qubits
             qgcn_conv = QGCNConv(layer_input_dims, q_depth, n_qubits=n_qubits)
             layers.append(qgcn_conv)
 
@@ -62,22 +61,15 @@ class QGCN(Module):
         return quantum_layers
 
     def forward(self, x, edge_index, batch):
-        """
-        Defining how tensors are supposed to move through the *dressed* quantum
-        net.
-        """
-
         h = x
-        for i in range(len(self.layers)):
-            h = self.layers[i](h, edge_index)
+        for layer in self.layers:
+            h = layer(h, edge_index)
             h = self.activ_fn(h)
 
-        # readout layer to get the embedding for each graph in batch
         h = global_mean_pool(h, batch)
         h = self.classifier(h)
 
         if self.readout is not None:
             h = self.readout(h)
 
-        # return the prediction from the postprocessing layer
         return h
