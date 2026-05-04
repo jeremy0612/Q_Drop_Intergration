@@ -116,8 +116,8 @@ jobs:
               --epochs "$EPOCHS" \
               --algorithm "$ALGORITHM" \
               --n-qubits "$N_QUBITS" \
-              --batch-size 16 \
-              --prune-window 16 \
+              --batch-size 64 \
+              --prune-window 8 \
               --output-dir "$OUTPUT_DIR" \
               --seed 42
           else
