@@ -105,6 +105,7 @@ jobs:
           ALGORITHM: ${{ github.event.inputs.algorithm || 'both' }}
           EPOCHS: ${{ github.event.inputs.epochs || '100' }}
           N_QUBITS: ${{ github.event.inputs.n_qubits || '' }}
+
         run: |
           echo "Q-Drop algorithm : $ALGORITHM"
           echo "Max epochs       : $EPOCHS"
@@ -115,6 +116,8 @@ jobs:
               --epochs "$EPOCHS" \
               --algorithm "$ALGORITHM" \
               --n-qubits "$N_QUBITS" \
+              --batch-size 16 \
+              --prune-window 16 \
               --output-dir "$OUTPUT_DIR" \
               --seed 42
           else
